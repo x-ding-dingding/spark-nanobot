@@ -1,6 +1,7 @@
 """Agent loop: the core processing engine."""
 
 import asyncio
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,7 @@ class AgentLoop:
         )
         
         self._running = False
+        self._process_lock = asyncio.Lock()  # Prevent concurrent _process_message calls
         self._register_default_tools()
     
     def _register_default_tools(self) -> None:
@@ -183,6 +185,10 @@ class AgentLoop:
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
+
+        Uses an asyncio lock to prevent concurrent execution, which would
+        cause shared tool contexts (message, cron, sticker, etc.) to be
+        overwritten by parallel calls from cron/process_direct.
         
         Args:
             msg: The inbound message to process.
@@ -190,6 +196,11 @@ class AgentLoop:
         Returns:
             The response message, or None if no response needed.
         """
+        async with self._process_lock:
+            return await self._process_message_inner(msg)
+
+    async def _process_message_inner(self, msg: InboundMessage) -> OutboundMessage | None:
+        """Actual message processing logic (called under _process_lock)."""
         # Handle system messages (subagent announces)
         # The chat_id contains the original "channel:chat_id" to route back to
         if msg.channel == "system":
@@ -224,8 +235,10 @@ class AgentLoop:
             sticker_tool.set_context(msg.channel, msg.chat_id, metadata=msg.metadata)
         
         # Build initial messages (use get_history for LLM-formatted messages)
+        # Deep copy to protect against background summarizer modifying session.messages
+        history_snapshot = copy.deepcopy(session.get_history())
         messages = self.context.build_messages(
-            history=session.get_history(),
+            history=history_snapshot,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel,
