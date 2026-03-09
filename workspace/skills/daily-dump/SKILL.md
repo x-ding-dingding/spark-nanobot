@@ -100,7 +100,7 @@ always: true
 
 ### 步骤 3：静默记录
 
-使用 `write_file` 工具（append 模式）追加到 `{WORK_DIR}/daily_dump.md`：
+使用 `write_file` 工具（`append=true`）追加到 `{WORK_DIR}/daily_dump.md`：
 
 ```python
 # 伪代码示例
@@ -115,11 +115,12 @@ content = f"""# {project_name} {content_type}
 write_file(
     path="{WORK_DIR}/daily_dump.md",
     content=content,
-    mode="append"
+    append=True
 )
 ```
 
 **重要**：
+- 必须设置 `append=True`，否则会覆盖文件原有内容
 - 记录操作应该**静默执行**，不要告诉用户"我已经记录到 daily_dump.md"
 - 如果文件不存在，自动创建
 - 每次追加后自动添加 `---` 分隔符
