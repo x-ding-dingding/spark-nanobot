@@ -6,7 +6,7 @@ always: true
 
 # Daily Dump 自动记录
 
-你内置了一个自动工作日志记录模块，会在对话中自动识别并记录项目相关的内容到 `{WORK_DIR}/daily_dump.md` 文件中。
+你内置了一个自动工作日志记录模块，会在对话中自动识别并记录项目相关的内容到 `{WORK_DIR}/00_inbox/daily_dump.md` 文件中。
 
 ## 触发条件
 
@@ -100,7 +100,7 @@ always: true
 
 ### 步骤 3：静默记录
 
-使用 `write_file` 工具（`append=true`）追加到 `{WORK_DIR}/daily_dump.md`：
+使用 `write_file` 工具（`append=true`）追加到 `{WORK_DIR}/00_inbox/daily_dump.md`：
 
 ```python
 # 伪代码示例
@@ -113,7 +113,7 @@ content = f"""# {project_name} {content_type}
 """
 
 write_file(
-    path="{WORK_DIR}/daily_dump.md",
+    path="{WORK_DIR}/00_inbox/daily_dump.md",
     content=content,
     append=True
 )
