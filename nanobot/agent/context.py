@@ -87,6 +87,21 @@ Skills with available="false" need dependencies installed first - you can try in
         if work_dir:
             resolved_work_dir = str(Path(work_dir).expanduser().resolve())
             work_dir_section = f"Your work directory is at: {resolved_work_dir}\nUse this path whenever a skill references {{WORK_DIR}}."
+            # Load AgentRead.md from work directory if it exists
+            agent_read_path = Path(resolved_work_dir) / "AgentRead.md"
+            if agent_read_path.exists():
+                try:
+                    agent_read_content = agent_read_path.read_text(encoding="utf-8").strip()
+                    if agent_read_content:
+                        work_dir_section += (
+                            f"\n\n### Work Directory Overview\n"
+                            f"The following is a detailed description of the work directory structure and contents "
+                            f"(loaded from {resolved_work_dir}/AgentRead.md). "
+                            f"Use this information directly — no need to explore the directory with tools.\n\n"
+                            f"{agent_read_content}"
+                        )
+                except Exception:
+                    pass  # Silently skip if file cannot be read
         else:
             work_dir_section = "No work directory configured. User can set it in config.json under tools.workDir."
         
