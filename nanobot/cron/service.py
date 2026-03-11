@@ -75,6 +75,44 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
     return None
 
 
+def _is_within_active_window(schedule: CronSchedule) -> bool:
+    """Check if current Beijing time falls within the schedule's active window.
+
+    Evaluates both ``active_hours`` (time-of-day ranges) and
+    ``active_weekdays`` (ISO weekday filter).  If neither is configured the
+    job is always considered active.
+
+    Returns ``True`` when the job should run, ``False`` when it should be
+    skipped.
+    """
+    now_beijing = _beijing_now_naive()
+
+    # Check weekday filter (1=Monday … 7=Sunday, matching datetime.isoweekday())
+    if schedule.active_weekdays:
+        if now_beijing.isoweekday() not in schedule.active_weekdays:
+            return False
+
+    # Check time-of-day ranges
+    if schedule.active_hours:
+        current_minutes = now_beijing.hour * 60 + now_beijing.minute
+        for window in schedule.active_hours:
+            if len(window) != 2:
+                continue
+            try:
+                start_h, start_m = (int(x) for x in window[0].split(":"))
+                end_h, end_m = (int(x) for x in window[1].split(":"))
+            except (ValueError, IndexError):
+                continue
+            start_total = start_h * 60 + start_m
+            end_total = end_h * 60 + end_m
+            if start_total <= current_minutes < end_total:
+                return True
+        # Had active_hours configured but none matched
+        return False
+
+    return True
+
+
 class CronService:
     """Service for managing and executing scheduled jobs."""
     
@@ -109,6 +147,8 @@ class CronService:
                             every_ms=j["schedule"].get("everyMs"),
                             expr=j["schedule"].get("expr"),
                             tz=j["schedule"].get("tz"),
+                            active_hours=j["schedule"].get("activeHours"),
+                            active_weekdays=j["schedule"].get("activeWeekdays"),
                         ),
                         payload=CronPayload(
                             kind=j["payload"].get("kind", "agent_turn"),
@@ -156,6 +196,8 @@ class CronService:
                         "everyMs": j.schedule.every_ms,
                         "expr": j.schedule.expr,
                         "tz": j.schedule.tz,
+                        "activeHours": j.schedule.active_hours,
+                        "activeWeekdays": j.schedule.active_weekdays,
                     },
                     "payload": {
                         "kind": j.payload.kind,
@@ -244,7 +286,22 @@ class CronService:
         ]
         
         for job in due_jobs:
-            await self._execute_job(job)
+            if _is_within_active_window(job.schedule):
+                await self._execute_job(job)
+            else:
+                # Outside active window — skip execution but advance schedule
+                logger.info(f"Cron: skipping job '{job.name}' ({job.id}) — outside active hours/weekdays")
+                job.state.last_status = "skipped"
+                job.state.last_run_at_ms = _now_ms()
+                job.updated_at_ms = _now_ms()
+                if job.schedule.kind == "at":
+                    if job.delete_after_run:
+                        self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                    else:
+                        job.enabled = False
+                        job.state.next_run_at_ms = None
+                else:
+                    job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
         
         self._save_store()
         self._arm_timer()

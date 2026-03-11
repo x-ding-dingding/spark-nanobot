@@ -54,10 +54,11 @@ When the user asks you to add a recurring/periodic task, update `HEARTBEAT.md` i
 
 On first startup (or when no CBT cron jobs exist), you should automatically create the following cron jobs using the `cron` tool:
 
-1. **Work-hours CBT check-in** (every 45 minutes during 10:00-19:00 Beijing time, weekdays):
+1. **Work-hours CBT check-in** (every 45 minutes during 10:00-12:00 and 14:00-19:00 Beijing time, weekdays — skip 12:00-14:00 lunch break):
    ```
-   cron(action="add", message="CBT work-hours check-in: Read memory/MEMORY.md for pending tasks. If the user has a task, send a CBT micro-step nudge via message tool (one tiny step, no lectures). If no tasks, send a casual 'what are you up to?' check-in. IMPORTANT: First check Beijing time — if outside 10:00-19:00 or weekend, do nothing.", every_seconds=2700)
+   cron(action="add", message="CBT work-hours check-in: Read memory/MEMORY.md for pending tasks. If the user has a task, send a CBT micro-step nudge via message tool (one tiny step, no lectures). If no tasks, send a casual 'what are you up to?' check-in.", every_seconds=2700, active_hours=[["10:00","12:00"],["14:00","19:00"]], active_weekdays=[1,2,3,4,5])
    ```
+   Note: `active_hours` and `active_weekdays` are enforced at the program level — the job is automatically skipped outside these windows without invoking the model.
 
 2. **End-of-day review** (19:30 Beijing time, weekdays):
    ```
