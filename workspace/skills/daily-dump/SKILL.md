@@ -104,7 +104,7 @@ always: true
 
 ```python
 # 伪代码示例
-content = f"""# {project_name} {content_type}
+content = f"""\n# {project_name} {content_type}
 
 {extracted_content}
 

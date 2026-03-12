@@ -20,6 +20,8 @@ This file stores important information that should persist across sessions.
 
 ## Important Notes
 
+- [ ] 对话中识别到项目相关内容时，自动使用 daily-dump skill 静默记录到 daily_dump.md
+
 (Things to remember)
 
 ---
