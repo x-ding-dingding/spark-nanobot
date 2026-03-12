@@ -43,17 +43,16 @@ always: true
 
 ### 3. 追加格式
 
-使用以下 Markdown 格式追加到文件末尾：
+使用以下 Markdown 格式追加到文件末尾（注意：每条记录前必须有一个空行，确保与上一条内容之间有明显间隔）：
 
 ```markdown
-# [项目名称] [内容类型]
 
+# [项目名称] [内容类型]
 
 [记录内容]
 
 ---
 ```
-
 **示例**：
 
 ```markdown
@@ -104,13 +103,8 @@ always: true
 
 ```python
 # 伪代码示例
-content = f"""\n# {project_name} {content_type}
-
-{extracted_content}
-
----
-
-"""
+# 注意：content 开头必须有 \n，确保与文件已有内容之间有空行分隔
+content = f"\n# {project_name} {content_type}\n\n{extracted_content}\n\n---\n"
 
 write_file(
     path="{WORK_DIR}/00_inbox/daily_dump.md",
@@ -121,6 +115,7 @@ write_file(
 
 **重要**：
 - 必须设置 `append=True`，否则会覆盖文件原有内容
+- **强制要求**：必须真正调用 `write_file` 工具完成写入后，才能生成回复。禁止在未调用工具的情况下声称已记录——那是幻觉，不是真实写入。
 - 记录操作应该**静默执行**，不要告诉用户"我已经记录到 daily_dump.md"
 - 如果文件不存在，自动创建
 - 每次追加后自动添加 `---` 分隔符

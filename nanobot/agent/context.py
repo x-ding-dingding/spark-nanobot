@@ -131,9 +131,9 @@ Your workspace is at: {workspace_path}
 ## Work Directory
 {work_dir_section}
 
-IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
-Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
-For normal conversation, just respond with text - do not call the message tool.
+IMPORTANT: For normal conversation replies, respond with text directly — do not call the 'message' tool (the framework will deliver your reply automatically). The 'message' tool is only for proactively pushing messages, e.g. from scheduled tasks or subagents.
+
+However, if any skill or background task requires file operations (write_file, read_file, edit_file, etc.), you MUST actually call those tools before generating your reply. Never claim a file operation is done without having called the corresponding tool — that is a hallucination.
 
 When remembering something, write to {workspace_path}/memory/MEMORY.md"""
     
