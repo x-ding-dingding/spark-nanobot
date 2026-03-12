@@ -25,6 +25,19 @@ from nanobot.agent.summarizer import Summarizer
 from nanobot.session.manager import SessionManager
 
 
+def _truncate_tool_result(result: str, max_chars: int = 200) -> str:
+    """
+    Truncate a tool result for session storage to avoid context explosion.
+
+    The full result is used in the live LLM context during the current turn.
+    Only a short summary is persisted so that future turns can confirm the
+    tool was called and whether it succeeded, without bloating the history.
+    """
+    if len(result) <= max_chars:
+        return result
+    return result[:max_chars] + f"... [truncated, {len(result)} chars total]"
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -250,7 +263,10 @@ class AgentLoop:
         iteration = 0
         final_content = None
         last_response = None
-        
+
+        # Collect tool call turns to persist into session history
+        tool_call_turns: list[tuple[list[dict[str, Any]], list[tuple[str, str, str]]]] = []
+
         while iteration < self.max_iterations:
             iteration += 1
             
@@ -273,15 +289,34 @@ class AgentLoop:
                     tool_calls=response.tool_calls,
                     reasoning_content=response.reasoning_content,
                 )
-                
-                # Execute tools
+
+                # Build tool_calls dicts for session persistence
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for tc in response.tool_calls
+                ]
+
+                # Execute tools and collect results
+                tool_results: list[tuple[str, str, str]] = []
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    # Add full result to current LLM context
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    # Store truncated result in session to avoid context explosion
+                    tool_results.append((tool_call.id, tool_call.name, _truncate_tool_result(result)))
+
+                tool_call_turns.append((tool_call_dicts, tool_results))
             else:
                 # No tool calls, we're done
                 final_content = response.content
@@ -294,8 +329,12 @@ class AgentLoop:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
         
-        # Save to session
+        # Save to session: user message → tool call turns → final assistant reply
         session.add_message("user", msg.content)
+        for tool_call_dicts, tool_results in tool_call_turns:
+            session.add_tool_call_message(content=None, tool_calls=tool_call_dicts)
+            for tool_call_id, tool_name, result in tool_results:
+                session.add_tool_result_message(tool_call_id, tool_name, result)
         session.add_message("assistant", final_content)
         self.sessions.save(session)
         
@@ -374,7 +413,10 @@ class AgentLoop:
         iteration = 0
         final_content = None
         last_response = None
-        
+
+        # Collect tool call turns to persist into session history
+        tool_call_turns: list[tuple[list[dict[str, Any]], list[tuple[str, str, str]]]] = []
+
         while iteration < self.max_iterations:
             iteration += 1
             
@@ -393,14 +435,32 @@ class AgentLoop:
                     tool_calls=response.tool_calls,
                     reasoning_content=response.reasoning_content,
                 )
-                
+
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for tc in response.tool_calls
+                ]
+
+                tool_results: list[tuple[str, str, str]] = []
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    # Add full result to current LLM context
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    # Store truncated result in session to avoid context explosion
+                    tool_results.append((tool_call.id, tool_call.name, _truncate_tool_result(result)))
+
+                tool_call_turns.append((tool_call_dicts, tool_results))
             else:
                 final_content = response.content
                 break
@@ -408,8 +468,12 @@ class AgentLoop:
         if final_content is None:
             final_content = "Background task completed."
         
-        # Save to session (mark as system message in history)
+        # Save to session: system message → tool call turns → final assistant reply
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
+        for tool_call_dicts, tool_results in tool_call_turns:
+            session.add_tool_call_message(content=None, tool_calls=tool_call_dicts)
+            for tool_call_id, tool_name, result in tool_results:
+                session.add_tool_result_message(tool_call_id, tool_name, result)
         session.add_message("assistant", final_content)
         self.sessions.save(session)
         

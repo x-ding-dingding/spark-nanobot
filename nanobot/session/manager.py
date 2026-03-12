@@ -27,32 +27,95 @@ class Session:
     summary: str = ""  # Conversation summary from previous context evictions
     summary_in_progress: bool = False  # True while background summarization is running (not persisted)
     
-    def add_message(self, role: str, content: str, **kwargs: Any) -> None:
-        """Add a message to the session."""
-        msg = {
+    def add_message(self, role: str, content: str | None = None, **kwargs: Any) -> None:
+        """Add a plain user/assistant message to the session."""
+        msg: dict[str, Any] = {
             "role": role,
-            "content": content,
+            "content": content or "",
             "timestamp": datetime.now().isoformat(),
             **kwargs
         }
         self.messages.append(msg)
         self.updated_at = datetime.now()
-    
+
+    def add_tool_call_message(
+        self,
+        content: str | None,
+        tool_calls: list[dict[str, Any]],
+        reasoning_content: str | None = None,
+    ) -> None:
+        """Add an assistant message that contains tool calls."""
+        msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": content or "",
+            "tool_calls": tool_calls,
+            "timestamp": datetime.now().isoformat(),
+        }
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
+        self.messages.append(msg)
+        self.updated_at = datetime.now()
+
+    def add_tool_result_message(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
+    ) -> None:
+        """Add a tool result message to the session."""
+        msg: dict[str, Any] = {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
+            "content": result,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.messages.append(msg)
+        self.updated_at = datetime.now()
+
     def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
         """
         Get message history for LLM context.
-        
+
+        Preserves tool call / tool result messages so the model can see
+        which tools were actually invoked in previous turns.
+
         Args:
             max_messages: Maximum messages to return.
-        
+
         Returns:
             List of messages in LLM format.
         """
-        # Get recent messages
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
-        
-        # Convert to LLM format (just role and content)
-        return [{"role": m["role"], "content": m["content"]} for m in recent]
+
+        llm_messages = []
+        for msg in recent:
+            role = msg["role"]
+            if role == "tool":
+                # Tool result: must include tool_call_id and name
+                llm_messages.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "name": msg.get("name", ""),
+                    "content": msg.get("content", ""),
+                })
+            elif role == "assistant" and msg.get("tool_calls"):
+                # Assistant message with tool calls
+                assistant_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": msg.get("content", ""),
+                    "tool_calls": msg["tool_calls"],
+                }
+                if msg.get("reasoning_content"):
+                    assistant_msg["reasoning_content"] = msg["reasoning_content"]
+                llm_messages.append(assistant_msg)
+            else:
+                # Plain user / assistant message
+                llm_messages.append({
+                    "role": role,
+                    "content": msg.get("content", ""),
+                })
+        return llm_messages
     
     def clear(self) -> None:
         """Clear all messages in the session."""
