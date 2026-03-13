@@ -28,6 +28,7 @@ cron/
 
 # Memory files (private)
 workspace/memory/*.md
+!workspace/memory/*.md.example
 
 # Personal workspace config (use *.example files as templates)
 workspace/SOUL.md
@@ -36,4 +37,5 @@ workspace/AGENTS.md
 workspace/TOOLS.md
 workspace/HEARTBEAT.md
 workspace/IDENTITY.md
+workspace/MEMORY.md
 

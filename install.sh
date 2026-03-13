@@ -109,6 +109,19 @@ for filename in "${WORKSPACE_FILES[@]}"; do
     fi
 done
 
+# Copy memory/MEMORY.md from example if not present
+MEMORY_TARGET="$WORKSPACE_DIR/memory/MEMORY.md"
+MEMORY_TEMPLATE="$WORKSPACE_DIR/memory/MEMORY.md.example"
+mkdir -p "$WORKSPACE_DIR/memory"
+if [[ -f "$MEMORY_TARGET" ]]; then
+    warn "memory/MEMORY.md already exists — skipping"
+elif [[ -f "$MEMORY_TEMPLATE" ]]; then
+    cp "$MEMORY_TEMPLATE" "$MEMORY_TARGET"
+    success "Created workspace/memory/MEMORY.md"
+else
+    warn "memory/MEMORY.md.example not found — skipping"
+fi
+
 # ── Step 5: Initialize work directory ────────────────────────────────────────
 
 echo ""
