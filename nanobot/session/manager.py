@@ -88,6 +88,15 @@ class Session:
         """
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
 
+        # Guard: if the slice starts mid-way through a tool call turn, the
+        # leading tool-result messages have no preceding assistant+tool_calls
+        # message, which causes providers (e.g. Dashscope) to reject the
+        # request with a 400 error.  Drop any orphaned tool messages at the
+        # front of the slice until we reach a safe starting point.
+        recent = list(recent)
+        while recent and recent[0].get("role") == "tool":
+            recent.pop(0)
+
         llm_messages = []
         for msg in recent:
             role = msg["role"]
@@ -116,7 +125,7 @@ class Session:
                     "content": msg.get("content", ""),
                 })
         return llm_messages
-    
+
     def clear(self) -> None:
         """Clear all messages in the session."""
         self.messages = []
