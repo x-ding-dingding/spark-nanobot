@@ -602,10 +602,9 @@ init_workdir.sh             # initialize work directory
 
 ---
 
-<a name="chinese-readme"></a>
+## <a id="chinese-readme"></a>Spark-nanobot — 个人 AI 助手
 
 <div align="center">
-  <h1>Spark-nanobot — 个人 AI 助手</h1>
   <p><em>基于 <a href="https://github.com/x-ding-dingding/cyper_bot">nanobot</a> · 超轻量 · 技能驱动 · 默认安全</em></p>
 </div>
 
