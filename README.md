@@ -9,6 +9,10 @@
   </p>
 </div>
 
+<p align="center">
+  <b>English</b> | <a href="#chinese-readme">中文文档</a>
+</p>
+
 ---
 
 Spark-nanobot is a personal AI assistant built on top of [nanobot]. It inherits nanobot's ultra-lightweight core (~4,000 lines) and extends it with a structured **work directory system**, **productivity-focused skills**, and **safe-by-default sandboxing**.
