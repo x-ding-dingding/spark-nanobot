@@ -36,7 +36,7 @@ Spark-nanobot is a personal AI assistant built on top of [nanobot]. It inherits 
 
 ```bash
 git clone <this-repo>
-cd nanobot
+cd spark-nanobot
 bash install.sh
 ```
 
@@ -629,7 +629,7 @@ Spark-nanobot 是一个基于 [nanobot](https://github.com/x-ding-dingding/cyper
 
 ```bash
 git clone <this-repo>
-cd nanobot
+cd spark-nanobot
 bash install.sh
 ```
 

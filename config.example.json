@@ -1,28 +1,44 @@
 {
   "providers": {
     "openrouter": {
-      "apiKey": "YOUR_OPENROUTER_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "anthropic": {
-      "apiKey": "YOUR_ANTHROPIC_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "openai": {
-      "apiKey": "YOUR_OPENAI_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "deepseek": {
-      "apiKey": "YOUR_DEEPSEEK_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "groq": {
-      "apiKey": "YOUR_GROQ_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "gemini": {
-      "apiKey": "YOUR_GEMINI_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "dashscope": {
-      "apiKey": "YOUR_DASHSCOPE_API_KEY"
+      "apiKey": "sk-",
+      "apiBase": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "extraHeaders": null
     },
     "moonshot": {
-      "apiKey": "YOUR_MOONSHOT_API_KEY"
+      "apiKey": "",
+      "apiBase": "",
+      "extraHeaders": null
     },
     "zhipu": {
       "apiKey": "YOUR_ZHIPU_API_KEY"
@@ -40,14 +56,15 @@
   },
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-5",
-      "maxTokens": 8192,
+      "model": "dashscope/qwen3.5-plus",
+      "maxTokens": 32768,
       "temperature": 0.7,
       "maxToolIterations": 20,
       "contextWindow": 32768,
-      "summarizeThreshold": 0.6,
+      "summarizeThreshold": 0.8,
       "messageBufferMin": 10,
-      "summaryModel": null
+      "summaryModel": null,
+      "reasoning_effort": "high"
     }
   },
   "channels": {
