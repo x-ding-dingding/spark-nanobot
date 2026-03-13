@@ -12,24 +12,6 @@
   </p>
 </div>
 
-> **English** | [中文文档](#chinese-readme)
-
----
-
-## Table of Contents
-
-- [Install](#-install)
-- [Quick Start](#-quick-start)
-- [Skills](#-skills)
-- [Work Directory](#-work-directory)
-- [Security & Sandboxing](#-security--sandboxing)
-- [Chat Channels](#-chat-apps)
-- [Configuration](#️-configuration)
-- [CLI Reference](#cli-reference)
-- [Docker](#-docker)
-- [Project Structure](#-project-structure)
-- [Contributing](#-contribute--roadmap)
-
 🐈 **nanobot** is an **ultra-lightweight** personal AI assistant inspired by [OpenClaw](https://github.com/openclaw/openclaw) 
 
 ⚡️ Delivers core agent functionality in just **~4,000** lines of code — **99% smaller** than Clawdbot's 430k+ lines.
@@ -89,41 +71,21 @@
 
 ## 📦 Install
 
-### One-step setup (recommended)
-
-```bash
-git clone https://github.com/x-ding-dingding/cyper_bot.git
-cd nanobot
-bash install.sh
-```
-
-`install.sh` will:
-1. Check Python ≥ 3.11
-2. Install nanobot
-3. Copy `config.example.json` → `config.json`
-4. Copy `workspace/*.md.example` → `workspace/*.md`
-5. Optionally initialize a [work directory](#-work-directory)
-
-Then open `config.json` and fill in your API key — done.
-
-### Manual install
-
-**From source** (latest features, recommended for development)
+**Install from source** (latest features, recommended for development)
 
 ```bash
 git clone https://github.com/x-ding-dingding/cyper_bot.git
 cd nanobot
 pip install -e .
-cp config.example.json config.json   # then edit to add your API key
 ```
 
-**With [uv](https://github.com/astral-sh/uv)** (stable, fast)
+**Install with [uv](https://github.com/astral-sh/uv)** (stable, fast)
 
 ```bash
 uv tool install nanobot-ai
 ```
 
-**From PyPI** (stable)
+**Install from PyPI** (stable)
 
 ```bash
 pip install nanobot-ai
@@ -132,16 +94,16 @@ pip install nanobot-ai
 ## 🚀 Quick Start
 
 > [!TIP]
-> Config file lives at `<project_root>/config.json` (same directory as this README).
+> Set your API key in `~/.nanobot/config.json`.
 > Get API keys: [OpenRouter](https://openrouter.ai/keys) (Global) · [Brave Search](https://brave.com/search/api/) (optional, for web search)
 
 **1. Initialize**
 
 ```bash
-bash install.sh
+nanobot onboard
 ```
 
-**2. Configure** (`config.json`)
+**2. Configure** (`~/.nanobot/config.json`)
 
 For OpenRouter - recommended for global users:
 ```json
@@ -178,7 +140,7 @@ Run nanobot with your own local models using vLLM or any OpenAI-compatible serve
 vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
 ```
 
-**2. Configure** (`config.json`)
+**2. Configure** (`~/.nanobot/config.json`)
 
 ```json
 {
@@ -268,7 +230,7 @@ Simply send this message to nanobot (replace `xxx@xxx` with your real email):
 Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/nanobot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
 ```
 
-nanobot will automatically register, configure `config.json`, and connect to Mochat.
+nanobot will automatically register, configure `~/.nanobot/config.json`, and connect to Mochat.
 
 **2. Restart gateway**
 
@@ -283,7 +245,7 @@ That's it — nanobot handles the rest!
 <details>
 <summary>Manual configuration (advanced)</summary>
 
-If you prefer to configure manually, add the following to `config.json`:
+If you prefer to configure manually, add the following to `~/.nanobot/config.json`:
 
 > Keep `claw_token` private. It should only be sent in `X-Claw-Token` header to your Mochat API endpoint.
 
@@ -612,206 +574,9 @@ nanobot gateway
 
 </details>
 
-## 🎯 Skills
-
-Skills are modular knowledge packages that extend the agent's capabilities. They live in `workspace/skills/` and are automatically loaded into the system prompt.
-
-### Built-in Skills
-
-These ship with nanobot out of the box:
-
-| Skill | What it does |
-|-------|-------------|
-| `github` | Interact with GitHub via `gh` CLI — check PRs, CI runs, issues, and more |
-| `weather` | Fetch current weather for any location |
-| `cron` | Create and manage scheduled reminders and recurring tasks |
-| `tmux` | Manage terminal sessions — run long tasks in the background |
-| `summarize` | Summarize URLs, YouTube videos, PDFs, and local files via `summarize.sh` |
-| `skill-creator` | Guide for creating new skills — helps you package domain knowledge for the agent |
-
-### Workspace Skills
-
-These are user-defined skills that live in `workspace/skills/`. The following are included as examples:
-
-| Skill | What it does |
-|-------|-------------|
-| `daily-dump` | **Always active.** Silently captures project notes, ideas, and progress into `{WORK_DIR}/00_inbox/daily_dump.md` during every conversation |
-| `iflow-organizer` | End-of-day organizer — merges the daily dump and routes content into project logs, knowledge base, and archive |
-| `todo-coach` | CBT-trained task coach — manages a global todo list, runs morning standups, and helps you stay focused without guilt |
-| `cbt-coach` | Cognitive behavioral therapy coach — helps you break through procrastination with micro-steps and gentle nudges |
-
-### How Skills Work
-
-Skills use a **progressive disclosure** model to stay token-efficient:
-
-1. **Metadata** (name + description) — always in context, ~100 words each
-2. **SKILL.md body** — loaded when the skill is triggered
-3. **Bundled scripts/references** — loaded on demand by the agent
-
-To add your own skill, create a folder in `workspace/skills/your-skill/` with a `SKILL.md` file. The `skill-creator` skill will guide you through the process.
-
----
-
-## 📁 Work Directory
-
-The work directory is a **personal knowledge base** separate from the nanobot project itself. It's where the agent stores your project notes, daily logs, and organized knowledge.
-
-### Setup
-
-```bash
-# During install.sh, you'll be prompted to set this up automatically.
-# Or run it standalone at any time:
-bash init_workdir.sh ~/my-workdir
-
-# The path is saved to config.json automatically:
-# "tools": { "workDir": "/Users/you/my-workdir" }
-```
-
-If no path is specified, the default is `<project_root>/workdir`.
-
-### Directory Structure
-
-```
-workdir/                        ← your work directory (configured via tools.workDir)
-├── 00_inbox/
-│   ├── daily_dump.md           # daily capture inbox — appended to automatically during conversations
-│   └── TODO_INDEX.md           # global todo list managed by todo-coach skill
-├── 10_projects/                # one subfolder per project (create as you go)
-│   └── my-project/
-│       └── work_log.md         # running log of progress, decisions, and notes
-├── 20_knowledge/               # reusable knowledge and reference material
-│   └── tech/
-│       └── work_log.md         # general tech notes and learnings
-├── 90_journal/                 # personal journal entries
-└── 99_archive/                 # long-term archive
-```
-
-**Key design decisions:**
-- `10_projects/` subdirectories are **not pre-created** — the agent creates them during conversation as you discuss projects
-- `00_inbox/daily_dump.md` is the single capture point; the `iflow-organizer` skill routes content from here into the right places at end of day
-- The work directory is **completely separate** from `workspace/` (which holds agent config and skills)
-
-### How Skills Use It
-
-Skills reference the work directory via `{WORK_DIR}`, which is injected into the system prompt automatically:
-
-```
-Your work directory is at: /Users/you/my-workdir
-Use this path whenever a skill references {WORK_DIR}.
-```
-
----
-
-## 🔒 Security & Sandboxing
-
-nanobot gives the agent real tools — file access, shell execution, web browsing. Here's exactly how it prevents the agent from touching things it shouldn't.
-
-### Layer 1 — Workspace Restriction (`restrictToWorkspace`)
-
-The most important safety control. When enabled, **all tools** (file read/write/edit/list and shell exec) are restricted to an allowlist of directories. The agent physically cannot access anything outside these paths.
-
-```json
-{
-  "tools": {
-    "restrictToWorkspace": true,
-    "allowedPaths": ["~/projects/my-app"]
-  }
-}
-```
-
-**What's automatically included in the allowlist:**
-- The nanobot project directory itself (always included, so the agent can read its own config and workspace)
-- `tools.workDir` (your work directory, if configured)
-- Any paths listed in `tools.allowedPaths`
-
-**What's blocked:** everything else on your filesystem — `~/Documents`, `~/Desktop`, other projects, system files.
-
-> [!TIP]
-> Set `"restrictToWorkspace": true` for any production or shared deployment. It's `false` by default to make local development easier.
-
-### Layer 2 — Protected Files
-
-Even within the nanobot project directory, certain core files can never be written, edited, or deleted by the agent (reading is still allowed). This prevents the agent from modifying its own safety controls.
-
-Default protected files:
-
-```
-nanobot/agent/tools/filesystem.py   # file access tool
-nanobot/agent/tools/shell.py        # shell execution tool
-nanobot/agent/tools/base.py         # tool base class
-nanobot/agent/tools/registry.py     # tool registry
-nanobot/agent/loop.py               # core agent loop
-nanobot/config/schema.py            # config schema
-nanobot/config/loader.py            # config loader
-nanobot/agent/subagent.py           # subagent manager
-```
-
-You can extend this list in `config.json`:
-
-```json
-{
-  "tools": {
-    "protectedFiles": [
-      "nanobot/agent/tools/filesystem.py",
-      "nanobot/agent/tools/shell.py",
-      "my-sensitive-file.py"
-    ]
-  }
-}
-```
-
-### Layer 3 — Dangerous Command Blocking
-
-The shell tool (`exec`) blocks a hardcoded list of dangerous patterns regardless of other settings:
-
-| Pattern | Blocked command |
-|---------|----------------|
-| `rm -rf` / `rm -r` | Recursive deletion |
-| `format` / `mkfs` / `diskpart` | Disk formatting |
-| `dd if=` | Raw disk write |
-| `shutdown` / `reboot` / `poweroff` | System power control |
-| `> /dev/sd*` | Write to block device |
-| Fork bomb pattern | `: () { : \| : & }; :` |
-
-Path traversal (`../`) is also blocked when `restrictToWorkspace` is enabled.
-
-### Layer 4 — Channel Access Control
-
-Each chat channel has an `allowFrom` list. Set it to restrict who can talk to your bot:
-
-```json
-{
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "token": "...",
-      "allowFrom": ["123456789"]
-    }
-  }
-}
-```
-
-Empty `allowFrom` = allow everyone. Non-empty = only listed user IDs can interact.
-
-### Layer 5 — Subagent Isolation
-
-Background subagents (spawned via the `spawn` tool) run with a **restricted tool set** — they have no `message` tool and no `spawn` tool. This prevents recursive spawning and stops subagents from sending unsolicited messages to users.
-
-### Summary
-
-| Threat | Defense |
-|--------|---------|
-| Agent reads/writes files outside project | `restrictToWorkspace: true` |
-| Agent modifies its own safety code | `protectedFiles` list |
-| Agent runs destructive shell commands | Hardcoded deny patterns |
-| Unauthorized users access the bot | `allowFrom` per channel |
-| Subagents spawn infinitely or spam users | Tool isolation on subagents |
-
----
-
 ## ⚙️ Configuration
 
-Config file: `<project_root>/config.json`
+Config file: `~/.nanobot/config.json`
 
 ### Providers
 
@@ -988,7 +753,7 @@ nanobot cron remove <job_id>
 ## 🐳 Docker
 
 > [!TIP]
-> Mount your local project directory into the container so your `config.json`, `workspace/`, and `sessions/` persist across restarts.
+> The `-v ~/.nanobot:/root/.nanobot` flag mounts your local config directory into the container, so your config and workspace persist across container restarts.
 
 Build and run nanobot in a container:
 
@@ -996,18 +761,18 @@ Build and run nanobot in a container:
 # Build the image
 docker build -t nanobot .
 
-# Run setup (first time only) — creates config.json and workspace files
-docker run -v $(pwd):/app --rm nanobot bash install.sh
+# Initialize config (first time only)
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot onboard
 
 # Edit config on host to add API keys
-vim config.json
+vim ~/.nanobot/config.json
 
 # Run gateway (connects to enabled channels, e.g. Telegram/Discord/Mochat)
-docker run -v $(pwd):/app -p 18790:18790 nanobot gateway
+docker run -v ~/.nanobot:/root/.nanobot -p 18790:18790 nanobot gateway
 
 # Or run a single command
-docker run -v $(pwd):/app --rm nanobot agent -m "Hello!"
-docker run -v $(pwd):/app --rm nanobot status
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot agent -m "Hello!"
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
 ```
 
 ## 📁 Project Structure

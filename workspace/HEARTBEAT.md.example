@@ -1,0 +1,18 @@
+# Heartbeat Tasks
+
+This file is checked every 30 minutes by your nanobot agent.
+Add tasks below that you want the agent to work on periodically.
+
+If this file has no tasks (only headers and comments), the agent will skip the heartbeat.
+
+## Active Tasks
+
+<!-- Add periodic tasks here. Examples:
+- [ ] Check weather and send a morning briefing
+- [ ] Scan inbox for urgent emails and summarize
+- [ ] Review MEMORY.md and send a daily progress nudge
+-->
+
+## Completed
+
+<!-- Move completed tasks here or delete them -->

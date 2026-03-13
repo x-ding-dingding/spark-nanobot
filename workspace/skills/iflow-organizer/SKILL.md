@@ -37,7 +37,7 @@ always: false
 
 ### 第一阶段：脚本预处理 (Pre-processing)
 
-1. **执行脚本**：运行 `python3 /Users/xiongmengjun/Documents/program/nanobot/workspace/skills/iflow-organizer/organizer_engine.py`。
+1. **执行脚本**：运行 `python3 {SKILL_DIR}/organizer_engine.py "{WORK_DIR}"`（其中 `{SKILL_DIR}` 为 skill 所在目录，通常是 `workspace/skills/iflow-organizer`）。
 2. **合并逻辑**：该脚本会自动将 `daily_dump.md` 中相同的一级标题（# Title）内容整合在一起，并输出到 `{WORK_DIR}/00_inbox/daily_preprocessed.md`。
 
 ### 第二阶段：方案提议 (Proposal)

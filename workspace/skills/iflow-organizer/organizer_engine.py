@@ -44,6 +44,12 @@ def preprocess_daily_dump(work_dir):
     print(f"Success: Merged {len(merged_data)} sections into {output_file}")
 
 if __name__ == "__main__":
-    # 从环境变量或硬编码获取工作目录
-    work_dir = "/Users/xiongmengjun/Documents/工作助手"
+    import sys
+    if len(sys.argv) > 1:
+        work_dir = sys.argv[1]
+    else:
+        work_dir = os.environ.get("NANOBOT_WORK_DIR", "")
+    if not work_dir:
+        print("Error: work_dir not specified. Pass it as an argument or set NANOBOT_WORK_DIR env var.")
+        sys.exit(1)
     preprocess_daily_dump(work_dir)
