@@ -1,6 +1,7 @@
 """Agent loop: the core processing engine."""
 
 import asyncio
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,21 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.tools.sticker import StickerTool
 from nanobot.agent.subagent import SubagentManager
+from nanobot.agent.summarizer import Summarizer
 from nanobot.session.manager import SessionManager
+
+
+def _truncate_tool_result(result: str, max_chars: int = 200) -> str:
+    """
+    Truncate a tool result for session storage to avoid context explosion.
+
+    The full result is used in the live LLM context during the current turn.
+    Only a short summary is persisted so that future turns can confirm the
+    tool was called and whether it succeeded, without bloating the history.
+    """
+    if len(result) <= max_chars:
+        return result
+    return result[:max_chars] + f"... [truncated, {len(result)} chars total]"
 
 
 class AgentLoop:
@@ -47,6 +62,13 @@ class AgentLoop:
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
+        allowed_paths: list[str] | None = None,
+        protected_paths: list[str] | None = None,
+        reasoning_effort: str | None = None,
+        context_window: int = 32768,
+        summarize_threshold: float = 0.6,
+        message_buffer_min: int = 10,
+        summary_model: str | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         from nanobot.cron.service import CronService
@@ -59,6 +81,18 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.reasoning_effort = reasoning_effort
+        self.allowed_paths = [Path(p).expanduser().resolve() for p in (allowed_paths or [])]
+        self.protected_paths = [Path(p).resolve() for p in (protected_paths or [])]
+        
+        # Summarization settings
+        self.context_window = context_window
+        self.summarize_threshold = summarize_threshold
+        self.message_buffer_min = message_buffer_min
+        self.summarizer = Summarizer(
+            provider=provider,
+            model=summary_model or self.model,
+        )
         
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -71,25 +105,36 @@ class AgentLoop:
             brave_api_key=brave_api_key,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
+            allowed_paths=self.allowed_paths,
+            protected_paths=self.protected_paths,
         )
         
         self._running = False
+        self._process_lock = asyncio.Lock()  # Prevent concurrent _process_message calls
         self._register_default_tools()
     
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        # File tools (restrict to workspace if configured)
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
-        self.tools.register(ReadFileTool(allowed_dir=allowed_dir))
-        self.tools.register(WriteFileTool(allowed_dir=allowed_dir))
-        self.tools.register(EditFileTool(allowed_dir=allowed_dir))
-        self.tools.register(ListDirTool(allowed_dir=allowed_dir))
+        # Build allowed directories list: workspace + extra allowed_paths
+        if self.restrict_to_workspace:
+            allowed_dirs = [self.workspace] + self.allowed_paths
+        else:
+            allowed_dirs = None
+
+        # File tools (protected_paths only on write/edit to allow reading)
+        protected = self.protected_paths or None
+        self.tools.register(ReadFileTool(allowed_dirs=allowed_dirs))
+        self.tools.register(WriteFileTool(allowed_dirs=allowed_dirs, protected_paths=protected))
+        self.tools.register(EditFileTool(allowed_dirs=allowed_dirs, protected_paths=protected))
+        self.tools.register(ListDirTool(allowed_dirs=allowed_dirs))
         
         # Shell tool
         self.tools.register(ExecTool(
             working_dir=str(self.workspace),
             timeout=self.exec_config.timeout,
             restrict_to_workspace=self.restrict_to_workspace,
+            allowed_dirs=self.allowed_paths,
+            protected_paths=protected,
         ))
         
         # Web tools
@@ -153,6 +198,10 @@ class AgentLoop:
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
+
+        Uses an asyncio lock to prevent concurrent execution, which would
+        cause shared tool contexts (message, cron, sticker, etc.) to be
+        overwritten by parallel calls from cron/process_direct.
         
         Args:
             msg: The inbound message to process.
@@ -160,6 +209,11 @@ class AgentLoop:
         Returns:
             The response message, or None if no response needed.
         """
+        async with self._process_lock:
+            return await self._process_message_inner(msg)
+
+    async def _process_message_inner(self, msg: InboundMessage) -> OutboundMessage | None:
+        """Actual message processing logic (called under _process_lock)."""
         # Handle system messages (subagent announces)
         # The chat_id contains the original "channel:chat_id" to route back to
         if msg.channel == "system":
@@ -194,18 +248,25 @@ class AgentLoop:
             sticker_tool.set_context(msg.channel, msg.chat_id, metadata=msg.metadata)
         
         # Build initial messages (use get_history for LLM-formatted messages)
+        # Deep copy to protect against background summarizer modifying session.messages
+        history_snapshot = copy.deepcopy(session.get_history())
         messages = self.context.build_messages(
-            history=session.get_history(),
+            history=history_snapshot,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            summary=session.summary or None,
         )
         
         # Agent loop
         iteration = 0
         final_content = None
-        
+        last_response = None
+
+        # Collect tool call turns to persist into session history
+        tool_call_turns: list[tuple[list[dict[str, Any]], list[tuple[str, str, str]]]] = []
+
         while iteration < self.max_iterations:
             iteration += 1
             
@@ -213,36 +274,49 @@ class AgentLoop:
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
-                model=self.model
+                model=self.model,
+                reasoning_effort=self.reasoning_effort,
             )
+            last_response = response
             
             # Handle tool calls
             if response.has_tool_calls:
-                # Add assistant message with tool calls
+                # Use raw assistant message from provider to preserve
+                # provider-specific fields (e.g. Gemini thought_signature)
+                messages = self.context.add_raw_assistant_message(
+                    messages, response.raw_assistant_message,
+                    content=response.content,
+                    tool_calls=response.tool_calls,
+                    reasoning_content=response.reasoning_content,
+                )
+
+                # Build tool_calls dicts for session persistence
                 tool_call_dicts = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)  # Must be JSON string
-                        }
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
                     }
                     for tc in response.tool_calls
                 ]
-                messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                )
-                
-                # Execute tools
+
+                # Execute tools and collect results
+                tool_results: list[tuple[str, str, str]] = []
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    # Add full result to current LLM context
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    # Store truncated result in session to avoid context explosion
+                    tool_results.append((tool_call.id, tool_call.name, _truncate_tool_result(result)))
+
+                tool_call_turns.append((tool_call_dicts, tool_results))
             else:
                 # No tool calls, we're done
                 final_content = response.content
@@ -255,10 +329,17 @@ class AgentLoop:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
         
-        # Save to session
+        # Save to session: user message → tool call turns → final assistant reply
         session.add_message("user", msg.content)
+        for tool_call_dicts, tool_results in tool_call_turns:
+            session.add_tool_call_message(content=None, tool_calls=tool_call_dicts)
+            for tool_call_id, tool_name, result in tool_results:
+                session.add_tool_result_message(tool_call_id, tool_name, result)
         session.add_message("assistant", final_content)
         self.sessions.save(session)
+        
+        # Check if summarization should be triggered based on token usage
+        self._maybe_trigger_summarization(session, last_response)
         
         return OutboundMessage(
             channel=msg.channel,
@@ -325,45 +406,61 @@ class AgentLoop:
             current_message=msg.content,
             channel=origin_channel,
             chat_id=origin_chat_id,
+            summary=session.summary or None,
         )
         
         # Agent loop (limited for announce handling)
         iteration = 0
         final_content = None
-        
+        last_response = None
+
+        # Collect tool call turns to persist into session history
+        tool_call_turns: list[tuple[list[dict[str, Any]], list[tuple[str, str, str]]]] = []
+
         while iteration < self.max_iterations:
             iteration += 1
             
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
-                model=self.model
+                model=self.model,
+                reasoning_effort=self.reasoning_effort,
             )
+            last_response = response
             
             if response.has_tool_calls:
+                messages = self.context.add_raw_assistant_message(
+                    messages, response.raw_assistant_message,
+                    content=response.content,
+                    tool_calls=response.tool_calls,
+                    reasoning_content=response.reasoning_content,
+                )
+
                 tool_call_dicts = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)
-                        }
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
                     }
                     for tc in response.tool_calls
                 ]
-                messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                )
-                
+
+                tool_results: list[tuple[str, str, str]] = []
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    # Add full result to current LLM context
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    # Store truncated result in session to avoid context explosion
+                    tool_results.append((tool_call.id, tool_call.name, _truncate_tool_result(result)))
+
+                tool_call_turns.append((tool_call_dicts, tool_results))
             else:
                 final_content = response.content
                 break
@@ -371,10 +468,17 @@ class AgentLoop:
         if final_content is None:
             final_content = "Background task completed."
         
-        # Save to session (mark as system message in history)
+        # Save to session: system message → tool call turns → final assistant reply
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
+        for tool_call_dicts, tool_results in tool_call_turns:
+            session.add_tool_call_message(content=None, tool_calls=tool_call_dicts)
+            for tool_call_id, tool_name, result in tool_results:
+                session.add_tool_result_message(tool_call_id, tool_name, result)
         session.add_message("assistant", final_content)
         self.sessions.save(session)
+        
+        # Check if summarization should be triggered based on token usage
+        self._maybe_trigger_summarization(session, last_response)
         
         return OutboundMessage(
             channel=origin_channel,
@@ -382,6 +486,50 @@ class AgentLoop:
             content=final_content
         )
     
+    def _maybe_trigger_summarization(
+        self, session: "Session", last_response: "LLMResponse | None"
+    ) -> None:
+        """Check token usage and trigger background summarization if needed.
+
+        Summarization fires when the last LLM response's prompt_tokens reaches
+        ``summarize_threshold`` of ``context_window``.  The current conversation
+        is *not* trimmed immediately — the background task will update
+        ``session.summary`` and trim messages once the summary is ready.
+        """
+        if last_response is None:
+            return
+        if session.summary_in_progress:
+            logger.debug(f"[Summarizer] Skipping trigger for {session.key}: summarization already in progress")
+            return
+
+        prompt_tokens = last_response.usage.get("prompt_tokens", 0)
+        threshold_tokens = int(self.context_window * self.summarize_threshold)
+
+        logger.debug(
+            f"[Summarizer] Token check for {session.key}: "
+            f"{prompt_tokens}/{threshold_tokens} tokens "
+            f"({prompt_tokens/threshold_tokens*100:.1f}% of threshold)"
+        )
+
+        if prompt_tokens < threshold_tokens:
+            return
+
+        logger.info(
+            f"[Summarizer] 🔥 Summarization triggered for {session.key}!\n"
+            f"  Prompt tokens: {prompt_tokens} >= threshold {threshold_tokens} "
+            f"({self.summarize_threshold:.0%} of {self.context_window})\n"
+            f"  Current messages: {len(session.messages)}\n"
+            f"  Will keep: {self.message_buffer_min} recent messages after summarization"
+        )
+        session.summary_in_progress = True
+        self.summarizer.fire_and_forget(
+            session=session,
+            session_manager=self.sessions,
+            messages_snapshot=list(session.messages),
+            previous_summary=session.summary,
+            min_keep=self.message_buffer_min,
+        )
+
     async def process_direct(
         self,
         content: str,

@@ -215,7 +215,7 @@ def onboard():
     
     console.print(f"\n{__logo__} nanobot is ready!")
     console.print("\nNext steps:")
-    console.print("  1. Add your API key to [cyan]~/.nanobot/config.json[/cyan]")
+    console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
     console.print("     Get one at: https://openrouter.ai/keys")
     console.print("  2. Chat: [cyan]nanobot agent -m \"Hello!\"[/cyan]")
     console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/x-ding-dingding/cyper_bot#-chat-apps[/dim]")
@@ -364,24 +364,37 @@ def gateway(
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
+        allowed_paths=config.tools.effective_allowed_paths,
+        protected_paths=config.tools.resolved_protected_paths,
+        reasoning_effort=config.agents.defaults.reasoning_effort,
+        context_window=config.agents.defaults.context_window,
+        summarize_threshold=config.agents.defaults.summarize_threshold,
+        message_buffer_min=config.agents.defaults.message_buffer_min,
+        summary_model=config.agents.defaults.summary_model,
     )
     
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
-        """Execute a cron job through the agent."""
+        """Execute a cron job through the agent.
+
+        The agent's message tool context is set to the job's channel/to so
+        that any ``message()`` calls inside the agent loop are routed to the
+        correct channel (e.g. dingtalk instead of cli).
+
+        The agent is expected to use the ``message`` tool to deliver messages
+        to the user. We do NOT additionally publish the agent's final text
+        response as an outbound message, because that would cause duplicate
+        messages when the agent already called ``message()`` during processing.
+        """
+        target_channel = job.payload.channel or "cli"
+        target_chat_id = job.payload.to or "direct"
+
         response = await agent.process_direct(
             job.payload.message,
             session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
+            channel=target_channel,
+            chat_id=target_chat_id,
         )
-        if job.payload.deliver and job.payload.to:
-            from nanobot.bus.events import OutboundMessage
-            await bus.publish_outbound(OutboundMessage(
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to,
-                content=response or ""
-            ))
         return response
     cron.on_job = on_cron_job
     
@@ -466,6 +479,13 @@ def agent(
         brave_api_key=config.tools.web.search.api_key or None,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
+        allowed_paths=config.tools.effective_allowed_paths,
+        protected_paths=config.tools.resolved_protected_paths,
+        reasoning_effort=config.agents.defaults.reasoning_effort,
+        context_window=config.agents.defaults.context_window,
+        summarize_threshold=config.agents.defaults.summarize_threshold,
+        message_buffer_min=config.agents.defaults.message_buffer_min,
+        summary_model=config.agents.defaults.summary_model,
     )
     
     # Show spinner when logs are off (no output to miss); skip when logs are on

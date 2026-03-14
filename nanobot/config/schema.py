@@ -156,11 +156,16 @@ class ChannelsConfig(BaseModel):
 
 class AgentDefaults(BaseModel):
     """Default agent configuration."""
-    workspace: str = "~/.nanobot/workspace"
+    workspace: str = ""  # Empty string means use <project_root>/workspace
     model: str = "anthropic/claude-opus-4-5"
     max_tokens: int = 8192
     temperature: float = 0.7
     max_tool_iterations: int = 20
+    reasoning_effort: str | None = None  # Thinking depth for reasoning models (e.g. Gemini 3): "low", "medium", "high"
+    context_window: int = 32768  # Context window size in tokens
+    summarize_threshold: float = 0.6  # Trigger summarization when prompt_tokens reaches this fraction of context_window
+    message_buffer_min: int = 10  # Minimum messages to retain after summarization
+    summary_model: str | None = None  # Model for summarization (defaults to main model)
 
 
 class AgentsConfig(BaseModel):
@@ -218,6 +223,43 @@ class ToolsConfig(BaseModel):
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
+    allowed_paths: list[str] = Field(default_factory=list)  # Additional directories the agent is allowed to access (when restrict_to_workspace is true)
+    work_dir: str = ""  #  work directory path, e.g. "~/工作助手". Injected into system prompt as {WORK_DIR} for skills to reference.
+    protected_files: list[str] = Field(default_factory=lambda: [
+        "nanobot/agent/tools/filesystem.py",
+        "nanobot/agent/tools/shell.py",
+        "nanobot/agent/tools/base.py",
+        "nanobot/agent/tools/registry.py",
+        "nanobot/agent/loop.py",
+        "nanobot/config/schema.py",
+        "nanobot/config/loader.py",
+        "nanobot/agent/subagent.py",
+    ])  # Files within the nanobot project that tools are never allowed to write/edit/delete (read is allowed)
+
+    @property
+    def project_root(self) -> str:
+        """Get the nanobot project root directory."""
+        return str(Path(__file__).parent.parent.resolve())
+
+    @property
+    def effective_allowed_paths(self) -> list[str]:
+        """Return allowed_paths with the nanobot project directory and work_dir auto-included."""
+        root = self.project_root
+        resolved_existing = [str(Path(p).expanduser().resolve()) for p in self.allowed_paths]
+        paths = list(self.allowed_paths)
+        if root not in resolved_existing:
+            paths = [root] + paths
+        if self.work_dir:
+            resolved_work = str(Path(self.work_dir).expanduser().resolve())
+            if resolved_work not in resolved_existing and resolved_work != root:
+                paths.append(self.work_dir)
+        return paths
+
+    @property
+    def resolved_protected_paths(self) -> list[str]:
+        """Return absolute paths of protected files (project_root + relative path)."""
+        root = Path(self.project_root)
+        return [str((root / f).resolve()) for f in self.protected_files]
 
 
 class Config(BaseSettings):
@@ -230,8 +272,15 @@ class Config(BaseSettings):
     
     @property
     def workspace_path(self) -> Path:
-        """Get expanded workspace path."""
-        return Path(self.agents.defaults.workspace).expanduser()
+        """Get expanded workspace path.
+
+        When workspace is empty (default), uses <project_root>/workspace.
+        """
+        workspace_str = self.agents.defaults.workspace
+        if workspace_str:
+            return Path(workspace_str).expanduser()
+        from nanobot.utils.helpers import get_project_root
+        return get_project_root() / "workspace"
     
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
