@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="nanobot_logo.png" alt="nanobot" width="400">
+  <img src="spark.png" alt="nanobot" width="400">
   <h1>Spark-nanobot — Personal AI Assistant</h1>
   <p><em>Built on <a href="">nanobot</a> · Ultra-lightweight · Skill-driven · Safe by default</em></p>
   <p>
