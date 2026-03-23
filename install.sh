@@ -26,6 +26,47 @@ success() { echo -e "${GREEN}✓  $*${RESET}"; }
 warn()    { echo -e "${YELLOW}⚠  $*${RESET}"; }
 error()   { echo -e "${RED}✗  $*${RESET}"; exit 1; }
 
+# Try pip install against default index first, then multiple CN mirrors.
+# Usage:
+#   pip_install_with_fallback "<desc>" <pip args...>
+pip_install_with_fallback() {
+    local desc="$1"
+    shift
+
+    local -a mirrors=(
+        "https://pypi.tuna.tsinghua.edu.cn/simple|pypi.tuna.tsinghua.edu.cn|TUNA"
+        "https://pypi.mirrors.ustc.edu.cn/simple|pypi.mirrors.ustc.edu.cn|USTC"
+        "https://mirrors.aliyun.com/pypi/simple|mirrors.aliyun.com|Aliyun"
+    )
+
+    info "Installing ${desc} from default index..."
+    if "$PYTHON_BIN" -m pip install \
+        --retries 5 \
+        --timeout 60 \
+        "$@" --quiet; then
+        success "Installed ${desc} from default index"
+        return 0
+    fi
+
+    warn "Default index failed. Trying domestic mirrors..."
+    local m index host name
+    for m in "${mirrors[@]}"; do
+        IFS='|' read -r index host name <<< "$m"
+        info "Trying ${name} mirror..."
+        if "$PYTHON_BIN" -m pip install \
+            --retries 5 \
+            --timeout 60 \
+            -i "$index" \
+            --trusted-host "$host" \
+            "$@" --quiet; then
+            success "Installed ${desc} via ${name} mirror"
+            return 0
+        fi
+    done
+
+    error "Failed to install ${desc}. Please check network/proxy settings and retry."
+}
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🤖  nanobot installer"
@@ -61,12 +102,21 @@ echo ""
 info "Installing nanobot..."
 
 if [[ -f "$SCRIPT_DIR/pyproject.toml" ]]; then
-    # Running from source — install in editable mode
-    "$PYTHON_BIN" -m pip install -e "$SCRIPT_DIR" --quiet
-    success "Installed nanobot from source (editable mode)"
+    # Running from source — prefer editable mode so CLI points to this repo.
+    if "$PYTHON_BIN" -m pip install -e "$SCRIPT_DIR" --retries 5 --timeout 60 --quiet; then
+        # Some macOS setups may mark generated .pth files as hidden; unhide it
+        # so Python loads editable path mapping reliably.
+        PTH_FILE="$("$PYTHON_BIN" -c 'import site; from pathlib import Path; p=[]; [p.extend(Path(d).glob("*nanobot*.pth")) for d in site.getsitepackages() if Path(d).exists()]; print(p[0] if p else "")' 2>/dev/null || true)"
+        if [[ -n "${PTH_FILE:-}" && -f "$PTH_FILE" ]]; then
+            chflags nohidden "$PTH_FILE" 2>/dev/null || true
+        fi
+        success "Installed nanobot from source (editable mode)"
+    else
+        warn "Editable install failed. Retrying with non-editable install..."
+        pip_install_with_fallback "nanobot from source (non-editable mode)" "$SCRIPT_DIR"
+    fi
 else
-    "$PYTHON_BIN" -m pip install nanobot --quiet
-    success "Installed nanobot from PyPI"
+    # pip_install_with_fallback "nanobot from PyPI" "nanobot"
 fi
 
 # ── Step 3: Copy config template ─────────────────────────────────────────────
@@ -172,6 +222,9 @@ echo "     - workspace/AGENTS.md  — behavioral guidelines"
 echo ""
 echo "  3. Start chatting:"
 echo ""
+echo "     ./nb gateway               # one-command launcher (local env)"
+echo "     ./nb agent                 # interactive CLI (local env)"
+echo ""
 echo "     nanobot agent              # interactive CLI"
 echo "     nanobot agent -m 'Hello!'  # single message"
 echo "     nanobot gateway            # start all channels"
@@ -180,3 +233,7 @@ echo "  📖  Full docs: https://github.com/x-ding-dingding/cyper_bot"
 echo ""
 success "Installation complete! Happy hacking 🚀"
 echo ""
+
+
+# source /Users/xiongmengjun/Desktop/program/spark-nanobot/.miniconda3/bin/activate /Users/xiongmengjun/Desktop/program/spark-nanobot/.py311
+# python -c "import nanobot; print(nanobot.__file__)"

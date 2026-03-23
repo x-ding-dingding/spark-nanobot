@@ -31,7 +31,7 @@
       "extraHeaders": null
     },
     "dashscope": {
-      "apiKey": "sk-",
+      "apiKey": "",
       "apiBase": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "extraHeaders": null
     },
@@ -41,13 +41,13 @@
       "extraHeaders": null
     },
     "zhipu": {
-      "apiKey": "YOUR_ZHIPU_API_KEY"
+      "apiKey": ""
     },
     "minimax": {
-      "apiKey": "YOUR_MINIMAX_API_KEY"
+      "apiKey": ""
     },
     "aihubmix": {
-      "apiKey": "YOUR_AIHUBMIX_API_KEY"
+      "apiKey": ""
     },
     "vllm": {
       "apiKey": "",

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NANOBOT_BIN="$SCRIPT_DIR/.py311/bin/nanobot"
+
+if [[ ! -x "$NANOBOT_BIN" ]]; then
+    echo "nanobot executable not found: $NANOBOT_BIN" >&2
+    echo "Please set up the local env first (for example: run ./install.sh)." >&2
+    exit 1
+fi
+
+exec "$NANOBOT_BIN" "$@"

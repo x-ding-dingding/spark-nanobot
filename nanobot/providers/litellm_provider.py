@@ -99,6 +99,26 @@ class LiteLLMProvider(LLMProvider):
                 if pattern in model_lower:
                     kwargs.update(overrides)
                     return
+
+    @staticmethod
+    def _redact_error_payload(payload: str | None) -> str | None:
+        """Redact sensitive context when upstream returns raw streamed events.
+
+        Some gateways return SSE chunks like:
+            event: response.created
+            data: {... "instructions": "...system prompt..."}
+        Dumping this verbatim leaks full prompt/context into logs.
+        """
+        if not payload:
+            return payload
+
+        text = str(payload)
+        lower = text.lower()
+        looks_like_sse = "event: response.created" in lower or "data: {" in lower
+        contains_prompt_like_fields = "\"instructions\"" in lower or "\"messages\"" in lower
+        if looks_like_sse and contains_prompt_like_fields:
+            return "[redacted streamed response payload containing prompt/context]"
+        return text
     
     async def chat(
         self,
@@ -132,8 +152,23 @@ class LiteLLMProvider(LLMProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        
-        if reasoning_effort:
+
+        # Compatibility guard:
+        # LiteLLM forces OpenAI gpt-5.4+ calls with (tools + reasoning_effort)
+        # through Responses API. Some OpenAI-compatible gateways return SSE
+        # chunks in a way LiteLLM can't normalize, causing APIError despite the
+        # model actually generating an answer. In that case, avoid passing
+        # reasoning_effort so the call stays on chat-completions semantics.
+        model_lower = model.lower()
+        is_gpt_54_plus = "gpt-5.4" in model_lower or "gpt-5.5" in model_lower
+        is_non_official_openai_base = bool(
+            self.api_base and "api.openai.com" not in self.api_base.lower()
+        )
+        skip_reasoning_effort = bool(
+            reasoning_effort and tools and is_gpt_54_plus and is_non_official_openai_base
+        )
+
+        if reasoning_effort and not skip_reasoning_effort:
             # DashScope (Qwen3) uses extra_body={"enable_thinking": True} to enable
             # extended thinking, rather than the standard reasoning_effort parameter.
             spec = find_by_model(model)
@@ -141,6 +176,12 @@ class LiteLLMProvider(LLMProvider):
                 kwargs["extra_body"] = {"enable_thinking": True}
             else:
                 kwargs["reasoning_effort"] = reasoning_effort
+        elif skip_reasoning_effort:
+            from loguru import logger
+            logger.warning(
+                "Skipping reasoning_effort for gpt-5.4+ on non-official OpenAI-compatible "
+                "api_base to avoid Responses API bridge incompatibility."
+            )
         
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
@@ -219,7 +260,8 @@ class LiteLLMProvider(LLMProvider):
                         response_body = str(e.response)
                 except Exception:
                     response_body = repr(e.response)
-                error_details.append(f"Response body: {response_body}")
+                redacted_body = self._redact_error_payload(response_body)
+                error_details.append(f"Response body: {redacted_body}")
 
             detail_str = "\n  ".join(error_details)
             logger.error(
@@ -232,8 +274,9 @@ class LiteLLMProvider(LLMProvider):
             if hasattr(e, "status_code"):
                 user_message += f" (HTTP {e.status_code})"
             if response_body:
-                body_preview = response_body[:500]
-                if len(response_body) > 500:
+                safe_body = self._redact_error_payload(response_body) or ""
+                body_preview = safe_body[:500]
+                if len(safe_body) > 500:
                     body_preview += "..."
                 user_message += f"\nAPI response: {body_preview}"
 

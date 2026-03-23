@@ -242,8 +242,13 @@ class DingTalkChannel(BaseChannel):
             msg_key = "sampleImageMsg"
             msg_param = json.dumps({"photoURL": photo_url})
         else:
-            msg_key = "sampleMarkdown"
-            msg_param = json.dumps({"text": msg.content, "title": "Nanobot Reply"})
+            # Prefer plain text for private chats; it has the lowest template
+            # validation friction on DingTalk's oToMessages endpoint.
+            content = str(msg.content or "").strip()
+            if not content:
+                content = "(empty message)"
+            msg_key = "sampleText"
+            msg_param = json.dumps({"content": content}, ensure_ascii=False)
 
         data = {
             "robotCode": self.config.client_id,
@@ -256,6 +261,23 @@ class DingTalkChannel(BaseChannel):
             resp = await self._http.post(url, json=data, headers=headers)
             if resp.status_code != 200:
                 logger.error(f"DingTalk private send failed: {resp.text}")
+                # Some tenants are strict about template payload validation.
+                # Retry once with the most conservative text payload.
+                if msg_type != "image" and "InvalidmsgParam" in resp.text:
+                    fallback = {
+                        "robotCode": self.config.client_id,
+                        "userIds": [msg.chat_id],
+                        "msgKey": "sampleText",
+                        "msgParam": json.dumps(
+                            {"content": str(msg.content or "").strip()},
+                            ensure_ascii=False,
+                        ),
+                    }
+                    retry = await self._http.post(url, json=fallback, headers=headers)
+                    if retry.status_code != 200:
+                        logger.error(f"DingTalk private send retry failed: {retry.text}")
+                    else:
+                        logger.debug(f"DingTalk private message sent (fallback) to {msg.chat_id}")
             else:
                 logger.debug(f"DingTalk private message sent to {msg.chat_id} (type={msg_type})")
         except Exception as e:
