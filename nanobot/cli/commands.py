@@ -371,6 +371,7 @@ def gateway(
         summarize_threshold=config.agents.defaults.summarize_threshold,
         message_buffer_min=config.agents.defaults.message_buffer_min,
         summary_model=config.agents.defaults.summary_model,
+        compress_model=config.agents.defaults.compress_model,
     )
     
     # Set cron callback (needs agent)
@@ -486,6 +487,7 @@ def agent(
         summarize_threshold=config.agents.defaults.summarize_threshold,
         message_buffer_min=config.agents.defaults.message_buffer_min,
         summary_model=config.agents.defaults.summary_model,
+        compress_model=config.agents.defaults.compress_model,
     )
     
     # Show spinner when logs are off (no output to miss); skip when logs are on

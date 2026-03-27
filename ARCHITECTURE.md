@@ -45,10 +45,11 @@ nanobot/
 │   ├── loop.py              # ★ AgentLoop：核心处理引擎（收消息→构建上下文→调LLM→执行工具→回消息）
 │   ├── context.py           # ContextBuilder：组装 system prompt（bootstrap 文件 + 记忆 + 技能）
 │   ├── mini_compact.py      # 微压缩：每次 LLM 请求前对历史消息做规则驱动清理（零 LLM 成本）
-│   ├── memory.py            # MemoryStore：日记（YYYY-MM-DD.md）+ 长期记忆（MEMORY.md）
+│   ├── memory.py            # MemoryStore：日记（YYYY-MM-DD.md）+ 长期记忆（MEMORY.md）+ 自动提取记忆写入
 │   ├── skills.py            # SkillsLoader：技能发现与加载（workspace/skills/ + 内置 skills/）
 │   ├── subagent.py          # SubagentManager：后台子代理（独立工具集，无 message/spawn 工具）
-│   ├── summarizer.py        # Summarizer：后台异步对话摘要（context window 管理）
+│   ├── compressor.py        # ★ Compressor：上下文压缩器（替换 Summarizer），提取 QA 对 + 长期记忆，SQLite 存储
+│   ├── summarizer.py        # [已废弃] 旧版 Summarizer，功能已被 Compressor 替代
 │   └── tools/
 │       ├── base.py          # Tool 抽象基类（name/description/parameters/execute + 参数校验）
 │       ├── registry.py      # ToolRegistry：工具注册/查找/执行
@@ -58,7 +59,8 @@ nanobot/
 │       ├── message.py       # MessageTool（向用户发消息）
 │       ├── spawn.py         # SpawnTool（启动子代理）
 │       ├── cron.py          # CronTool（创建/管理定时任务）
-│       └── sticker.py       # StickerTool（发送表情包图片）
+│       ├── sticker.py       # StickerTool（发送表情包图片）
+│       └── memory_recall.py # MemoryRecallTool（通过关键字检索事件记忆）
 │
 ├── providers/
 │   ├── base.py              # LLMProvider 抽象基类 + LLMResponse / ToolCallRequest 数据类
@@ -237,7 +239,7 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 - 第一行是 metadata（含 summary），后续每行一条消息
 - `get_history(max_messages=50)` 返回最近 50 条消息给 LLM
 
-### 4.7 Context Window 管理（Summarizer + 微压缩）
+### 4.7 Context Window 管理（Compressor + 微压缩）
 
 上下文管理分两层：
 
@@ -247,11 +249,24 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 - 大输出截断：单个工具输出超过 10K 字符的，保留头 4K + 尾 2K，中间截断
 - 集成位置：`context.py` 的 `build_messages()` 中，对 history 调用 `mini_compact()` 后再 extend 到 messages
 
-**第二层：LLM 摘要（Summarizer）** — 需要调用 LLM，在 token 使用量达到阈值时触发：
+**第二层：上下文压缩（Compressor）** — 需要调用 LLM，在 token 使用量达到阈值时触发（`agent/compressor.py`）：
 - 当 LLM 返回的 `prompt_tokens` 达到 `context_window * summarize_threshold`（默认 60%）时触发
-- 异步后台执行，不阻塞主 agent loop
-- 生成摘要后：`session.summary = 摘要文本`，`session.messages` 只保留最近 `message_buffer_min` 条
-- 下次构建 prompt 时，摘要作为 "Conversation Summary" 段落注入 system prompt
+- 异步后台执行（`fire_and_forget`），不阻塞主 agent loop
+- **压缩方式**：在当前 messages 快照上追加一条 user message 作为压缩指令，复用 LLM 的 KV cache
+- **压缩产出**：
+  - **QA 对（事件记忆）**：从对话中提取已完成事件的 (question, conclusion, keywords)，存入 SQLite（`memory.db`）
+  - **长期记忆**：提取用户偏好/规范/经验教训，自动 append 到 `workspace/memory/MEMORY.md`
+- **裁剪策略**：固定保留最近 3 轮完整 messages（裁剪点在 user message 边界，不会截断 tool_calls/tool response 对）
+- **竞态防护**：裁剪时从 `session.messages` 的当前状态取尾部（而非快照），防止压缩期间新消息丢失
+- `session.summary` 存储 reconstructed_summary（QA 对拼接），下次构建 prompt 时作为 "Conversation Summary" 段落注入
+
+**记忆召回工具（MemoryRecallTool）**：
+- 注册为 `memory_recall` 工具，供 agent 在对话中主动召回历史事件记忆
+- 通过关键字匹配查询 SQLite 中的 `event_keywords` 索引，按匹配数 + 时间排序返回 top_k 结果
+
+**数据存储**：
+- `<project_root>/memory.db`：SQLite 数据库（aiosqlite），包含 `event_memories` 和 `event_keywords` 两张表
+- `workspace/memory/MEMORY.md`：长期记忆文件（自动提取的偏好/规范 append 到此处，已在 system prompt 中自动注入）
 
 ### 4.8 定时任务（Cron + Heartbeat）
 
@@ -335,12 +350,12 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 | 添加聊天渠道 | `channels/base.py` + `channels/manager.py` + `config/schema.py` |
 | 修改配置结构 | `config/schema.py` + `config/loader.py` |
 | 会话/历史管理 | `session/manager.py` |
-| 记忆系统 | `agent/memory.py` |
+| 记忆系统 | `agent/memory.py` + `agent/compressor.py` + `agent/tools/memory_recall.py` |
 | 技能系统 | `agent/skills.py` |
 | 定时任务 | `cron/service.py` + `cron/types.py` |
 | 心跳任务 | `heartbeat/service.py` |
 | 子代理 | `agent/subagent.py` |
-| 对话摘要 | `agent/summarizer.py` |
+| 上下文压缩 | `agent/compressor.py`（替代旧版 `agent/summarizer.py`） |
 | CLI 命令 | `cli/commands.py` |
 
 ---
@@ -353,9 +368,10 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 4. **配置格式**：JSON 文件用 camelCase，Python 代码用 snake_case，`loader.py` 自动转换
 5. **会话隔离**：不同 channel:chat_id 有独立的 Session，互不干扰
 6. **子代理隔离**：子代理没有 message/spawn 工具，不能直接给用户发消息或递归 spawn
-7. **Summarizer 是异步的**：摘要在后台生成，不阻塞当前对话，通过 `summary_in_progress` 标志防止重复触发
+7. **Compressor 是异步的**：上下文压缩在后台执行（`fire_and_forget`），不阻塞当前对话，通过 `summary_in_progress` 标志防止重复触发。压缩产出 QA 对存入 SQLite、长期记忆写入 MEMORY.md
 8. **工具输出保护**：`read_file` 默认最多 2000 行 + 120K 字符硬上限，已知大文件类型前置拦截；`exec` 超 10K 字符头尾保留截断，超 50K 卸载到临时文件；`list_dir` 默认最多 200 条；Session 历史中工具结果截断为 2000 字符（头尾保留）
 9. **微压缩（Mini-Compaction）**：每次 LLM 请求前对历史消息做规则驱动清理（`agent/mini_compact.py`），不调用 LLM、零成本。包括：清理旧工具输出（只保留最近 3 轮原文）、图片/文档占位替换、大输出头尾截断。在 `context.py` 的 `build_messages()` 中集成
+10. **记忆管理系统**：`agent/compressor.py` 替代旧版 `summarizer.py`，压缩时提取 QA 对（事件记忆）存入 SQLite + 长期记忆写入 MEMORY.md。`agent/tools/memory_recall.py` 提供关键字召回工具。配置项 `compress_model` 可指定压缩用的模型（默认使用主模型）
 
 ---
 

@@ -21,7 +21,8 @@ from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
 from nanobot.agent.tools.sticker import StickerTool
 from nanobot.agent.subagent import SubagentManager
-from nanobot.agent.summarizer import Summarizer
+from nanobot.agent.compressor import Compressor
+from nanobot.agent.tools.memory_recall import MemoryRecallTool
 from nanobot.session.manager import SessionManager
 
 
@@ -82,6 +83,7 @@ class AgentLoop:
         summarize_threshold: float = 0.6,
         message_buffer_min: int = 10,
         summary_model: str | None = None,
+        compress_model: str | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         from nanobot.cron.service import CronService
@@ -98,13 +100,14 @@ class AgentLoop:
         self.allowed_paths = [Path(p).expanduser().resolve() for p in (allowed_paths or [])]
         self.protected_paths = [Path(p).resolve() for p in (protected_paths or [])]
         
-        # Summarization settings
+        # Compression settings (compress_model > summary_model > main model)
         self.context_window = context_window
         self.summarize_threshold = summarize_threshold
         self.message_buffer_min = message_buffer_min
-        self.summarizer = Summarizer(
+        self.compressor = Compressor(
             provider=provider,
-            model=summary_model or self.model,
+            model=compress_model or summary_model or self.model,
+            workspace=workspace,
         )
         
         self.context = ContextBuilder(workspace)
@@ -173,6 +176,9 @@ class AgentLoop:
         )
         if sticker_tool._stickers:
             self.tools.register(sticker_tool)
+        
+        # Memory recall tool
+        self.tools.register(MemoryRecallTool(compressor=self.compressor))
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -512,14 +518,14 @@ class AgentLoop:
         if last_response is None:
             return
         if session.summary_in_progress:
-            logger.debug(f"[Summarizer] Skipping trigger for {session.key}: summarization already in progress")
+            logger.debug(f"[Compressor] Skipping trigger for {session.key}: compression already in progress")
             return
 
         prompt_tokens = last_response.usage.get("prompt_tokens", 0)
         threshold_tokens = int(self.context_window * self.summarize_threshold)
 
         logger.debug(
-            f"[Summarizer] Token check for {session.key}: "
+            f"[Compressor] Token check for {session.key}: "
             f"{prompt_tokens}/{threshold_tokens} tokens "
             f"({prompt_tokens/threshold_tokens*100:.1f}% of threshold)"
         )
@@ -528,14 +534,13 @@ class AgentLoop:
             return
 
         logger.info(
-            f"[Summarizer] 🔥 Summarization triggered for {session.key}!\n"
+            f"[Compressor] 🔥 Compression triggered for {session.key}!\n"
             f"  Prompt tokens: {prompt_tokens} >= threshold {threshold_tokens} "
             f"({self.summarize_threshold:.0%} of {self.context_window})\n"
-            f"  Current messages: {len(session.messages)}\n"
-            f"  Will keep: {self.message_buffer_min} recent messages after summarization"
+            f"  Current messages: {len(session.messages)}"
         )
         session.summary_in_progress = True
-        self.summarizer.fire_and_forget(
+        self.compressor.fire_and_forget(
             session=session,
             session_manager=self.sessions,
             messages_snapshot=list(session.messages),

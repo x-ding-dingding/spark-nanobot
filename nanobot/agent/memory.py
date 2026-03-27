@@ -53,6 +53,37 @@ class MemoryStore:
         """Write to long-term memory (MEMORY.md)."""
         self.memory_file.write_text(content, encoding="utf-8")
     
+    def append_long_term(self, items: list[dict[str, str]]) -> None:
+        """Append auto-extracted long-term memories to MEMORY.md.
+
+        Each item should have 'category' (preference/convention/lesson)
+        and 'content' keys.
+
+        Args:
+            items: List of memory dicts with 'category' and 'content'.
+        """
+        if not items:
+            return
+
+        existing = self.read_long_term()
+        new_lines = []
+        for item in items:
+            category = item.get("category", "general")
+            content = item.get("content", "")
+            if content:
+                new_lines.append(f"- [{category}] {content}")
+
+        if not new_lines:
+            return
+
+        addition = "\n".join(new_lines)
+        if existing:
+            updated = existing.rstrip() + "\n\n### Auto-extracted Memories\n" + addition + "\n"
+        else:
+            updated = "# Long-term Memory\n\n### Auto-extracted Memories\n" + addition + "\n"
+
+        self.write_long_term(updated)
+    
     def get_recent_memories(self, days: int = 7) -> str:
         """
         Get memories from the last N days.

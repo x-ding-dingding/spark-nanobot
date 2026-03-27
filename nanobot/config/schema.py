@@ -166,6 +166,7 @@ class AgentDefaults(BaseModel):
     summarize_threshold: float = 0.6  # Trigger summarization when prompt_tokens reaches this fraction of context_window
     message_buffer_min: int = 10  # Minimum messages to retain after summarization
     summary_model: str | None = None  # Model for summarization (defaults to main model)
+    compress_model: str | None = None  # Model for context compression (defaults to summary_model, then main model)
 
 
 class AgentsConfig(BaseModel):
