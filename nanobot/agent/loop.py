@@ -25,17 +25,30 @@ from nanobot.agent.summarizer import Summarizer
 from nanobot.session.manager import SessionManager
 
 
-def _truncate_tool_result(result: str, max_chars: int = 200) -> str:
+def _truncate_tool_result(result: str, max_chars: int = 2000) -> str:
     """
     Truncate a tool result for session storage to avoid context explosion.
 
     The full result is used in the live LLM context during the current turn.
-    Only a short summary is persisted so that future turns can confirm the
-    tool was called and whether it succeeded, without bloating the history.
+    Only a condensed version is persisted so that future turns can recall
+    what the tool returned without bloating the history.
+
+    Keeps the first ~1400 chars (head) and last ~400 chars (tail) to
+    preserve both the beginning context and trailing status/errors.
     """
     if len(result) <= max_chars:
         return result
-    return result[:max_chars] + f"... [truncated, {len(result)} chars total]"
+
+    head_chars = int(max_chars * 0.7)
+    tail_chars = max_chars - head_chars
+    head = result[:head_chars]
+    tail = result[-tail_chars:]
+    omitted = len(result) - head_chars - tail_chars
+    return (
+        f"{head}\n"
+        f"... [{omitted:,} chars omitted] ...\n"
+        f"{tail}"
+    )
 
 
 class AgentLoop:

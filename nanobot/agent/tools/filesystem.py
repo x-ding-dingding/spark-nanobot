@@ -42,20 +42,56 @@ def _resolve_path(
                 )
     return resolved
 
+# File extensions that are known to be very large or not useful to read in full
+_BLOCKED_EXTENSIONS: set[str] = {
+    ".lock", ".lockb",          # lock files (package-lock.json handled by name)
+    ".min.js", ".min.css",      # minified bundles
+    ".map",                     # source maps
+    ".wasm",                    # WebAssembly
+    ".pyc", ".pyo",             # compiled Python
+    ".so", ".dylib", ".dll",    # native libraries
+    ".exe", ".bin",             # binaries
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",  # archives
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",  # images
+    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv",  # media
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx",  # documents
+    ".sqlite", ".db",          # databases
+}
+
+_BLOCKED_FILENAMES: set[str] = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "composer.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+}
+
+# Default limits
+_DEFAULT_MAX_LINES = 2000
+_MAX_RESULT_CHARS = 120_000  # ~30K tokens
+
+
 class ReadFileTool(Tool):
-    """Tool to read file contents."""
-    
+    """Tool to read file contents with output protection."""
+
     def __init__(self, allowed_dirs: list[Path] | None = None):
         self._allowed_dirs = allowed_dirs
 
     @property
     def name(self) -> str:
         return "read_file"
-    
+
     @property
     def description(self) -> str:
-        return "Read the contents of a file at the given path."
-    
+        return (
+            "Read the contents of a file. By default reads up to 2000 lines. "
+            "Use offset and limit to paginate through large files. "
+            "Known large/binary file types are blocked."
+        )
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
@@ -63,22 +99,109 @@ class ReadFileTool(Tool):
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The file path to read"
-                }
+                    "description": "The file path to read",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Starting line number (0-based). Defaults to 0.",
+                    "default": 0,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return. Defaults to 2000.",
+                    "default": _DEFAULT_MAX_LINES,
+                },
             },
-            "required": ["path"]
+            "required": ["path"],
         }
-    
-    async def execute(self, path: str, **kwargs: Any) -> str:
+
+    async def execute(
+        self,
+        path: str,
+        offset: int = 0,
+        limit: int = _DEFAULT_MAX_LINES,
+        **kwargs: Any,
+    ) -> str:
         try:
             file_path = _resolve_path(path, self._allowed_dirs)
             if not file_path.exists():
                 return f"Error: File not found: {path}"
             if not file_path.is_file():
                 return f"Error: Not a file: {path}"
-            
+
+            # Block known large / binary file types
+            if file_path.name in _BLOCKED_FILENAMES:
+                size = file_path.stat().st_size
+                return (
+                    f"Blocked: {file_path.name} is a lock/generated file "
+                    f"({size:,} bytes). Use exec with grep/head/tail to inspect it."
+                )
+
+            suffix = file_path.suffix.lower()
+            # Handle compound extensions like .min.js
+            if suffix == ".js" and file_path.stem.endswith(".min"):
+                suffix = ".min.js"
+            elif suffix == ".css" and file_path.stem.endswith(".min"):
+                suffix = ".min.css"
+
+            if suffix in _BLOCKED_EXTENSIONS:
+                size = file_path.stat().st_size
+                return (
+                    f"Blocked: {file_path.name} appears to be a binary or "
+                    f"generated file ({size:,} bytes). "
+                    f"Use exec with appropriate commands to inspect it."
+                )
+
+            # Read the file
             content = file_path.read_text(encoding="utf-8")
-            return content
+            lines = content.splitlines(keepends=True)
+            total_lines = len(lines)
+
+            # Clamp offset
+            if offset < 0:
+                offset = 0
+            if offset >= total_lines:
+                return (
+                    f"File {path} has {total_lines} lines. "
+                    f"Offset {offset} is beyond the end of the file."
+                )
+
+            # Clamp limit
+            if limit <= 0:
+                limit = _DEFAULT_MAX_LINES
+
+            end = min(offset + limit, total_lines)
+            selected = lines[offset:end]
+            result = "".join(selected)
+
+            # Hard cap on character count (~30K tokens)
+            truncated_by_chars = False
+            if len(result) > _MAX_RESULT_CHARS:
+                result = result[:_MAX_RESULT_CHARS]
+                truncated_by_chars = True
+
+            # Build footer with pagination info
+            shown_lines = end - offset
+            remaining = total_lines - end
+            footer_parts: list[str] = []
+
+            if remaining > 0 or truncated_by_chars:
+                if truncated_by_chars:
+                    footer_parts.append(
+                        f"[Content truncated at {_MAX_RESULT_CHARS:,} chars for context safety]"
+                    )
+                footer_parts.append(
+                    f"[Showing lines {offset + 1}-{end} of {total_lines} total]"
+                )
+                if remaining > 0:
+                    footer_parts.append(
+                        f"[Use offset={end} to view the next {min(remaining, limit)} lines]"
+                    )
+
+            if footer_parts:
+                result = result.rstrip("\n") + "\n\n" + "\n".join(footer_parts)
+
+            return result
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -204,20 +327,27 @@ class EditFileTool(Tool):
             return f"Error editing file: {str(e)}"
 
 
+_DEFAULT_LIST_LIMIT = 200
+
+
 class ListDirTool(Tool):
-    """Tool to list directory contents."""
-    
+    """Tool to list directory contents with a result limit."""
+
     def __init__(self, allowed_dirs: list[Path] | None = None):
         self._allowed_dirs = allowed_dirs
 
     @property
     def name(self) -> str:
         return "list_dir"
-    
+
     @property
     def description(self) -> str:
-        return "List the contents of a directory."
-    
+        return (
+            "List the contents of a directory. "
+            "Returns up to 200 entries by default. "
+            "Use limit to control the number of results."
+        )
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
@@ -225,29 +355,47 @@ class ListDirTool(Tool):
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The directory path to list"
-                }
+                    "description": "The directory path to list",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of entries to return. Defaults to 200.",
+                    "default": _DEFAULT_LIST_LIMIT,
+                },
             },
-            "required": ["path"]
+            "required": ["path"],
         }
-    
-    async def execute(self, path: str, **kwargs: Any) -> str:
+
+    async def execute(self, path: str, limit: int = _DEFAULT_LIST_LIMIT, **kwargs: Any) -> str:
         try:
             dir_path = _resolve_path(path, self._allowed_dirs)
             if not dir_path.exists():
                 return f"Error: Directory not found: {path}"
             if not dir_path.is_dir():
                 return f"Error: Not a directory: {path}"
-            
-            items = []
-            for item in sorted(dir_path.iterdir()):
-                prefix = "📁 " if item.is_dir() else "📄 "
-                items.append(f"{prefix}{item.name}")
-            
-            if not items:
+
+            if limit <= 0:
+                limit = _DEFAULT_LIST_LIMIT
+
+            all_items = sorted(dir_path.iterdir())
+            total = len(all_items)
+
+            if total == 0:
                 return f"Directory {path} is empty"
-            
-            return "\n".join(items)
+
+            shown = all_items[:limit]
+            lines: list[str] = []
+            for item in shown:
+                prefix = "📁 " if item.is_dir() else "📄 "
+                lines.append(f"{prefix}{item.name}")
+
+            if total > limit:
+                lines.append(
+                    f"\n[Showing {limit} of {total} entries. "
+                    f"Use exec with ls/find for the full listing.]"
+                )
+
+            return "\n".join(lines)
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:

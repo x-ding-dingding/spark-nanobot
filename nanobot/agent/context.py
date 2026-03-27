@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from nanobot.agent.memory import MemoryStore
+from nanobot.agent.mini_compact import mini_compact
 from nanobot.agent.skills import SkillsLoader
 
 
@@ -189,8 +190,8 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             )
         messages.append({"role": "system", "content": system_prompt})
 
-        # History
-        messages.extend(history)
+        # History (apply mini-compaction to reduce context size)
+        messages.extend(mini_compact(history))
 
         # Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)

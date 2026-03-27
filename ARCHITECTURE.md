@@ -44,6 +44,7 @@ nanobot/
 ├── agent/
 │   ├── loop.py              # ★ AgentLoop：核心处理引擎（收消息→构建上下文→调LLM→执行工具→回消息）
 │   ├── context.py           # ContextBuilder：组装 system prompt（bootstrap 文件 + 记忆 + 技能）
+│   ├── mini_compact.py      # 微压缩：每次 LLM 请求前对历史消息做规则驱动清理（零 LLM 成本）
 │   ├── memory.py            # MemoryStore：日记（YYYY-MM-DD.md）+ 长期记忆（MEMORY.md）
 │   ├── skills.py            # SkillsLoader：技能发现与加载（workspace/skills/ + 内置 skills/）
 │   ├── subagent.py          # SubagentManager：后台子代理（独立工具集，无 message/spawn 工具）
@@ -51,8 +52,8 @@ nanobot/
 │   └── tools/
 │       ├── base.py          # Tool 抽象基类（name/description/parameters/execute + 参数校验）
 │       ├── registry.py      # ToolRegistry：工具注册/查找/执行
-│       ├── filesystem.py    # ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
-│       ├── shell.py         # ExecTool（带危险命令拦截 + 超时 + 路径限制）
+│       ├── filesystem.py    # ReadFileTool（分页 + 大文件拦截）, WriteFileTool, EditFileTool, ListDirTool（结果上限）
+│       ├── shell.py         # ExecTool（危险命令拦截 + 超时 + 路径限制 + 头尾截断 + 大输出卸载到临时文件）
 │       ├── web.py           # WebSearchTool（Brave API）, WebFetchTool（readability 提取）
 │       ├── message.py       # MessageTool（向用户发消息）
 │       ├── spawn.py         # SpawnTool（启动子代理）
@@ -201,6 +202,12 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 - 工具在 `AgentLoop._register_default_tools()` 中注册到 `ToolRegistry`
 - 工具定义通过 `to_schema()` 转为 OpenAI function calling 格式
 - 工具执行前自动做参数校验（`validate_params`）
+- **工具输出保护**（防止上下文爆炸）：
+  - `ReadFileTool`：默认最多 2000 行，硬上限 120K 字符（~30K token），支持 `offset`/`limit` 分页；已知大文件类型（lock、bundle、binary 等）前置拦截
+  - `ExecTool`：超 10K 字符头尾保留截断（头 5K + 尾 3K）；超 50K 字符卸载到临时文件，上下文中只放引用 + 首尾预览
+  - `ListDirTool`：默认最多返回 200 条，超出提示总数
+  - `WebFetchTool`：默认 50K 字符上限，返回中标记 `truncated: true`
+  - Session 持久化：工具结果截断为 2000 字符（头 70% + 尾 30%），仅影响后续轮次历史回顾
 - **添加新工具的步骤**：
   1. 在 `nanobot/agent/tools/` 下创建新文件，继承 `Tool`
   2. 在 `AgentLoop._register_default_tools()` 中 import 并注册
@@ -230,8 +237,17 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 - 第一行是 metadata（含 summary），后续每行一条消息
 - `get_history(max_messages=50)` 返回最近 50 条消息给 LLM
 
-### 4.7 Context Window 管理（Summarizer）
+### 4.7 Context Window 管理（Summarizer + 微压缩）
 
+上下文管理分两层：
+
+**第一层：微压缩（Mini-Compaction）** — 纯规则驱动，每次 LLM 请求前执行，零成本（`agent/mini_compact.py`）：
+- 清理旧工具输出：只保留最近 3 轮的 tool result 原文，更早的替换为 `[tool result omitted for brevity]`
+- 图片/文档占位替换：把历史中的 `image_url` 和 `document` content block 替换为 `[image]`/`[document]` 文本占位符
+- 大输出截断：单个工具输出超过 10K 字符的，保留头 4K + 尾 2K，中间截断
+- 集成位置：`context.py` 的 `build_messages()` 中，对 history 调用 `mini_compact()` 后再 extend 到 messages
+
+**第二层：LLM 摘要（Summarizer）** — 需要调用 LLM，在 token 使用量达到阈值时触发：
 - 当 LLM 返回的 `prompt_tokens` 达到 `context_window * summarize_threshold`（默认 60%）时触发
 - 异步后台执行，不阻塞主 agent loop
 - 生成摘要后：`session.summary = 摘要文本`，`session.messages` 只保留最近 `message_buffer_min` 条
@@ -313,7 +329,7 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 | 场景 | 需要看的文件 |
 |------|-------------|
 | 理解核心循环 | `agent/loop.py` |
-| 理解 prompt 组装 | `agent/context.py` |
+| 理解 prompt 组装 | `agent/context.py` + `agent/mini_compact.py` |
 | 添加/修改工具 | `agent/tools/base.py` + `agent/tools/registry.py` + `agent/loop.py` |
 | 添加 LLM 提供商 | `providers/registry.py` + `config/schema.py` |
 | 添加聊天渠道 | `channels/base.py` + `channels/manager.py` + `config/schema.py` |
@@ -338,3 +354,13 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 5. **会话隔离**：不同 channel:chat_id 有独立的 Session，互不干扰
 6. **子代理隔离**：子代理没有 message/spawn 工具，不能直接给用户发消息或递归 spawn
 7. **Summarizer 是异步的**：摘要在后台生成，不阻塞当前对话，通过 `summary_in_progress` 标志防止重复触发
+8. **工具输出保护**：`read_file` 默认最多 2000 行 + 120K 字符硬上限，已知大文件类型前置拦截；`exec` 超 10K 字符头尾保留截断，超 50K 卸载到临时文件；`list_dir` 默认最多 200 条；Session 历史中工具结果截断为 2000 字符（头尾保留）
+9. **微压缩（Mini-Compaction）**：每次 LLM 请求前对历史消息做规则驱动清理（`agent/mini_compact.py`），不调用 LLM、零成本。包括：清理旧工具输出（只保留最近 3 轮原文）、图片/文档占位替换、大输出头尾截断。在 `context.py` 的 `build_messages()` 中集成
+
+---
+
+## 十、待优化项
+
+### Prompt Cache 与微压缩的权衡
+
+微压缩修改的是历史深处的旧 tool_result，这些内容处于 Prompt Cache 前缀的深处。由于缓存是严格前缀匹配，改动一个旧 token 会导致从该位置往后的所有缓存失效。在 5 分钟 TTL 约束下，上一轮积累的缓存链条可能因此全部报废，下次请求所有 token 按全价计费。未来需要在上下文节省和缓存命中率之间找到平衡点（例如：只在首次压缩时清理，后续轮次不再修改已压缩的内容）。

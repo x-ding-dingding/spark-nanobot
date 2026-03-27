@@ -3,10 +3,18 @@
 import asyncio
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
+
+# Output limits
+_MAX_OUTPUT_CHARS = 10_000
+_HEAD_CHARS = 5_000
+_TAIL_CHARS = 3_000
+# Threshold above which output is offloaded to a temp file instead of truncated
+_OFFLOAD_THRESHOLD = 50_000
 
 
 class ExecTool(Tool):
@@ -101,16 +109,68 @@ class ExecTool(Tool):
                 output_parts.append(f"\nExit code: {process.returncode}")
             
             result = "\n".join(output_parts) if output_parts else "(no output)"
-            
-            # Truncate very long output
-            max_len = 10000
-            if len(result) > max_len:
-                result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
-            
+
+            # Handle very long output
+            if len(result) > _OFFLOAD_THRESHOLD:
+                # Offload to temp file and return a summary reference
+                result = self._offload_to_file(result, command)
+            elif len(result) > _MAX_OUTPUT_CHARS:
+                # Head + tail truncation (preserves errors that usually appear at the end)
+                result = self._truncate_head_tail(result)
+
             return result
             
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    @staticmethod
+    def _truncate_head_tail(result: str) -> str:
+        """Truncate output keeping both head and tail for context."""
+        total = len(result)
+        head = result[:_HEAD_CHARS]
+        tail = result[-_TAIL_CHARS:]
+        omitted = total - _HEAD_CHARS - _TAIL_CHARS
+        return (
+            f"{head}\n\n"
+            f"... [{omitted:,} chars omitted] ...\n\n"
+            f"{tail}\n\n"
+            f"[Output truncated: {total:,} chars total. "
+            f"Use head/tail/grep for more precise inspection.]"
+        )
+
+    @staticmethod
+    def _offload_to_file(result: str, command: str) -> str:
+        """Write large output to a temp file and return a summary reference."""
+        total_lines = result.count("\n") + 1
+        suffix = ".txt"
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=suffix,
+            prefix="nanobot-exec-",
+            delete=False,
+            encoding="utf-8",
+        )
+        tmp.write(result)
+        tmp.close()
+
+        # Build a short preview: first 5 lines + last 5 lines
+        lines = result.splitlines()
+        preview_parts: list[str] = []
+        if len(lines) <= 10:
+            preview_parts.append("\n".join(lines))
+        else:
+            preview_parts.append("\n".join(lines[:5]))
+            preview_parts.append("...")
+            preview_parts.append("\n".join(lines[-5:]))
+        preview = "\n".join(preview_parts)
+
+        return (
+            f"Output too large for context ({len(result):,} chars, {total_lines:,} lines).\n"
+            f"Full output saved to: {tmp.name}\n\n"
+            f"Preview (first/last 5 lines):\n{preview}\n\n"
+            f"[Use read_file to inspect the full output, or exec with "
+            f"head/tail/grep for targeted inspection.]"
+        )
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""
