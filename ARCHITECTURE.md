@@ -262,11 +262,16 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 
 **记忆召回工具（MemoryRecallTool）**：
 - 注册为 `memory_recall` 工具，供 agent 在对话中主动召回历史事件记忆
-- 通过关键字匹配查询 SQLite 中的 `event_keywords` 索引，按匹配数 + 时间排序返回 top_k 结果
+- 召回流程分两步，完全不污染主对话上下文：
+  1. **关键词选择**：从 SQLite 获取所有复合键列表，发起一次**独立 LLM 调用**（messages = 轻量 system + 最近 3-5 轮 user/assistant 对话 + 关键词列表 + 选择指令），模型从真实存在的关键词中选择，不凭空造词
+  2. **精确召回**：用选中的复合键精确查 SQLite，返回对应 event 的 question + conclusion
+- `MemoryRecallTool` 持有 session 引用，内部自取最近几轮对话（跳过 tool_calls/tool result）
+- 独立 LLM 调用的 messages 不进入主对话上下文，主上下文只注入最终召回结果（tool result）
 
 **数据存储**：
 - `<project_root>/memory.db`：SQLite 数据库（aiosqlite），包含 `event_memories` 和 `event_keywords` 两张表
-- `workspace/memory/MEMORY.md`：长期记忆文件（自动提取的偏好/规范 append 到此处，已在 system prompt 中自动注入）
+  - `event_keywords.keyword` 存储**拼接复合键**（如 `'nanobot-配置迁移-项目目录'`），每个 event 一条记录，而非拆分的单个关键词
+- `workspace/memory/MEMORY.md`：长期记忆文件（仅在用户明确主动表达要求/纠错时写入，已在 system prompt 中自动注入）
 
 ### 4.8 定时任务（Cron + Heartbeat）
 
@@ -351,6 +356,7 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 | 修改配置结构 | `config/schema.py` + `config/loader.py` |
 | 会话/历史管理 | `session/manager.py` |
 | 记忆系统 | `agent/memory.py` + `agent/compressor.py` + `agent/tools/memory_recall.py` |
+| 记忆系统测试 | `tests/test_memory_quality.py`（单元质量测试）+ `tests/test_memory_sandbox.py`（沙箱集成测试） |
 | 技能系统 | `agent/skills.py` |
 | 定时任务 | `cron/service.py` + `cron/types.py` |
 | 心跳任务 | `heartbeat/service.py` |
@@ -372,6 +378,7 @@ system prompt 由以下部分按顺序拼接（用 `---` 分隔）：
 8. **工具输出保护**：`read_file` 默认最多 2000 行 + 120K 字符硬上限，已知大文件类型前置拦截；`exec` 超 10K 字符头尾保留截断，超 50K 卸载到临时文件；`list_dir` 默认最多 200 条；Session 历史中工具结果截断为 2000 字符（头尾保留）
 9. **微压缩（Mini-Compaction）**：每次 LLM 请求前对历史消息做规则驱动清理（`agent/mini_compact.py`），不调用 LLM、零成本。包括：清理旧工具输出（只保留最近 3 轮原文）、图片/文档占位替换、大输出头尾截断。在 `context.py` 的 `build_messages()` 中集成
 10. **记忆管理系统**：`agent/compressor.py` 替代旧版 `summarizer.py`，压缩时提取 QA 对（事件记忆）存入 SQLite + 长期记忆写入 MEMORY.md。`agent/tools/memory_recall.py` 提供关键字召回工具。配置项 `compress_model` 可指定压缩用的模型（默认使用主模型）
+11. **记忆系统沙箱测试**：`tests/test_memory_sandbox.py` 提供严格读写隔离的集成测试环境，可 replay 真实 session 数据验证压缩和召回质量。隔离机制：`SandboxSessionManager`（save 只写内存不落盘）、沙箱 workspace（复制 bootstrap 文件但隔离 `memory/MEMORY.md`）、`compressor._db_path` 指向临时 SQLite。测试覆盖三个维度：(1) 完整 agent 上下文下的压缩质量（system prompt 干扰、tool result 噪声、二次压缩去重）；(2) summary 仍在上下文时的召回；(3) summary 已被覆盖后仅从 SQLite 召回。运行方式：`python3 tests/test_memory_sandbox.py --session sessions/xxx.jsonl --recent 30`
 
 ---
 

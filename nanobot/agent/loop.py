@@ -177,8 +177,11 @@ class AgentLoop:
         if sticker_tool._stickers:
             self.tools.register(sticker_tool)
         
-        # Memory recall tool
-        self.tools.register(MemoryRecallTool(compressor=self.compressor))
+        # Memory recall tool (session injected per-message via set_session())
+        self.tools.register(MemoryRecallTool(
+            compressor=self.compressor,
+            provider=provider,
+        ))
     
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
@@ -265,6 +268,10 @@ class AgentLoop:
         sticker_tool = self.tools.get("sticker")
         if isinstance(sticker_tool, StickerTool):
             sticker_tool.set_context(msg.channel, msg.chat_id, metadata=msg.metadata)
+
+        recall_tool = self.tools.get("memory_recall")
+        if isinstance(recall_tool, MemoryRecallTool):
+            recall_tool.set_session(session)
         
         # Build initial messages (use get_history for LLM-formatted messages)
         # Deep copy to protect against background summarizer modifying session.messages

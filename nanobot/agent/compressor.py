@@ -31,10 +31,10 @@ class LongTermMemoryItem:
 
 @dataclass(frozen=True, slots=True)
 class EventMemoryItem:
-    """A completed event extracted as a QA pair with keyword index."""
+    """A completed event extracted as a QA pair with a composite keyword key."""
     question: str
     conclusion: str
-    keywords: list[str]
+    composite_key: str  # hyphen-joined specific entities, e.g. "nanobot-配置迁移-项目目录"
 
 
 @dataclass(slots=True)
@@ -63,12 +63,12 @@ COMPRESSION_INSTRUCTION = """Please analyze our conversation above and extract t
     {
       "question": "concise question describing the task/topic",
       "conclusion": "concise conclusion/answer/outcome",
-      "keywords": ["keyword1", "keyword2"]
+      "composite_key": "entity1-entity2-entity3"
     }
   ],
   "long_term_memories": [
     {
-      "category": "preference|convention|lesson",
+      "category": "requirement|correction|constraint",
       "content": "memory content"
     }
   ]
@@ -76,8 +76,24 @@ COMPRESSION_INSTRUCTION = """Please analyze our conversation above and extract t
 
 Rules:
 1. qa_pairs: Extract completed events/tasks as Q&A pairs. Skip any incomplete events (question asked but no conclusion yet).
-2. long_term_memories: Extract user preferences, conventions, or lessons learned that should be remembered long-term.
-3. keywords: Include key entities and topic tags for each Q&A pair.
+2. composite_key: A single hyphen-joined string of 2-4 SPECIFIC named entities that uniquely
+   identify this event (project names, feature names, tool names, person names, unique identifiers).
+   NEVER use generic status words (e.g. "未开始", "进行中", "完成"), generic action words
+   (e.g. "任务进度", "确认", "更新"), or adjectives. The composite_key must uniquely identify
+   THIS event and not apply to many other events.
+   Good example: "nanobot-配置迁移-项目目录"
+   Bad example: "任务-进度-未开始"
+3. long_term_memories: ONLY extract when the user EXPLICITLY states a requirement, correction,
+   or complaint in their own words.
+   Valid triggers:
+   - User gives a future instruction: "以后/下次/记住/不要再..."
+   - User corrects a mistake: "这个不对", "你搞错了", "应该是..."
+   - User states a clear constraint: "我不喜欢X", "必须用Y方式"
+   Do NOT extract:
+   - Inferred habits or preferences from conversation tone or style
+   - Content from the system prompt, agent persona, or SOUL.md
+   - One-time behaviors that may not be recurring preferences
+   If in doubt, leave long_term_memories as an empty array [].
 4. Only output valid JSON, no other text."""
 
 COMPRESSION_INSTRUCTION_WITH_PREVIOUS = """Please analyze our conversation above and extract the following in JSON format.
@@ -94,12 +110,12 @@ Now extract NEW events from the conversation above (do not re-extract events alr
     {{
       "question": "concise question describing the task/topic",
       "conclusion": "concise conclusion/answer/outcome",
-      "keywords": ["keyword1", "keyword2"]
+      "composite_key": "entity1-entity2-entity3"
     }}
   ],
   "long_term_memories": [
     {{
-      "category": "preference|convention|lesson",
+      "category": "requirement|correction|constraint",
       "content": "memory content"
     }}
   ]
@@ -107,8 +123,20 @@ Now extract NEW events from the conversation above (do not re-extract events alr
 
 Rules:
 1. qa_pairs: Extract completed events/tasks as Q&A pairs. Skip any incomplete events (question asked but no conclusion yet).
-2. long_term_memories: Extract user preferences, conventions, or lessons learned that should be remembered long-term.
-3. keywords: Include key entities and topic tags for each Q&A pair.
+2. composite_key: A single hyphen-joined string of 2-4 SPECIFIC named entities that uniquely
+   identify this event (project names, feature names, tool names, person names, unique identifiers).
+   NEVER use generic status words (e.g. "未开始", "进行中", "完成"), generic action words
+   (e.g. "任务进度", "确认", "更新"), or adjectives.
+   Good example: "nanobot-配置迁移-项目目录"
+   Bad example: "任务-进度-未开始"
+3. long_term_memories: ONLY extract when the user EXPLICITLY states a requirement, correction,
+   or complaint in their own words.
+   Valid triggers:
+   - User gives a future instruction: "以后/下次/记住/不要再..."
+   - User corrects a mistake: "这个不对", "你搞错了", "应该是..."
+   - User states a clear constraint: "我不喜欢X", "必须用Y方式"
+   Do NOT extract inferred habits, content from system prompt/SOUL.md, or one-time behaviors.
+   If in doubt, leave long_term_memories as an empty array [].
 4. Only extract NEW information not already covered in the previous summary.
 5. Only output valid JSON, no other text."""
 
@@ -314,10 +342,10 @@ class Compressor:
             EventMemoryItem(
                 question=qa.get("question", ""),
                 conclusion=qa.get("conclusion", ""),
-                keywords=qa.get("keywords", []),
+                composite_key=qa.get("composite_key", "").strip().lower(),
             )
             for qa in data.get("qa_pairs", [])
-            if qa.get("question") and qa.get("conclusion")
+            if qa.get("question") and qa.get("conclusion") and qa.get("composite_key")
         ]
 
         long_term = [
@@ -364,7 +392,11 @@ class Compressor:
     async def _save_event_memories(
         self, session_key: str, qa_pairs: list[EventMemoryItem]
     ) -> None:
-        """Persist QA pairs and their keyword indices to SQLite."""
+        """Persist QA pairs and their composite key index to SQLite.
+
+        Each event gets exactly one composite_key entry in event_keywords —
+        a hyphen-joined string of specific named entities (e.g. "nanobot-配置迁移-项目目录").
+        """
         await self._ensure_db()
 
         from datetime import datetime
@@ -378,13 +410,11 @@ class Compressor:
                 )
                 event_id = cursor.lastrowid
 
-                for keyword in qa.keywords:
-                    normalized = keyword.strip().lower()
-                    if normalized:
-                        await db.execute(
-                            "INSERT INTO event_keywords (event_id, keyword) VALUES (?, ?)",
-                            (event_id, normalized),
-                        )
+                if qa.composite_key:
+                    await db.execute(
+                        "INSERT INTO event_keywords (event_id, keyword) VALUES (?, ?)",
+                        (event_id, qa.composite_key),
+                    )
 
             await db.commit()
 
@@ -407,32 +437,49 @@ class Compressor:
 
     # -- Query API (used by MemoryRecallTool) -------------------------------
 
-    async def search_event_memories(
-        self, keywords: list[str], top_k: int = 5
-    ) -> list[dict[str, Any]]:
-        """Search event memories by keyword matching.
+    async def get_all_composite_keys(self) -> list[str]:
+        """Return all distinct composite keys currently in the event_keywords index.
 
-        Returns the top_k events with the most keyword matches, ordered by
-        match count descending, then by recency.
+        The MemoryRecallTool calls this first so the LLM can select from real
+        existing keys rather than hallucinating keywords.
         """
         await self._ensure_db()
 
-        if not keywords:
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT DISTINCT keyword FROM event_keywords ORDER BY keyword"
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        return [row[0] for row in rows]
+
+    async def search_by_composite_keys(
+        self, composite_keys: list[str], top_k: int = 5
+    ) -> list[dict[str, Any]]:
+        """Fetch events by exact composite key match, ordered by recency.
+
+        Args:
+            composite_keys: List of composite keys selected by the LLM from
+                            get_all_composite_keys().
+            top_k: Maximum number of results to return.
+        """
+        await self._ensure_db()
+
+        if not composite_keys:
             return []
 
-        normalized = [kw.strip().lower() for kw in keywords if kw.strip()]
+        normalized = [key.strip().lower() for key in composite_keys if key.strip()]
         if not normalized:
             return []
 
         placeholders = ",".join("?" for _ in normalized)
         query = f"""
             SELECT em.id, em.session_key, em.question, em.conclusion, em.created_at,
-                   COUNT(ek.id) AS match_count
+                   ek.keyword AS composite_key
             FROM event_memories em
             JOIN event_keywords ek ON ek.event_id = em.id
             WHERE ek.keyword IN ({placeholders})
-            GROUP BY em.id
-            ORDER BY match_count DESC, em.created_at DESC
+            ORDER BY em.created_at DESC
             LIMIT ?
         """
 
@@ -448,7 +495,7 @@ class Compressor:
                 "question": row["question"],
                 "conclusion": row["conclusion"],
                 "created_at": row["created_at"],
-                "match_count": row["match_count"],
+                "composite_key": row["composite_key"],
             }
             for row in rows
         ]
