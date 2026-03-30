@@ -180,7 +180,7 @@ class AgentLoop:
         # Memory recall tool (session injected per-message via set_session())
         self.tools.register(MemoryRecallTool(
             compressor=self.compressor,
-            provider=provider,
+            provider=self.provider,
         ))
     
     async def run(self) -> None:
