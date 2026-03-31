@@ -14,6 +14,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from loguru import logger
+
 # How many recent "tool-call turns" keep their full tool results.
 # A turn = one assistant message with tool_calls + the subsequent tool messages.
 RECENT_TURNS_TO_KEEP = 3
@@ -40,6 +42,9 @@ def mini_compact(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     turn_boundaries = _find_tool_turn_boundaries(compacted)
     recent_cutoff = len(turn_boundaries) - RECENT_TURNS_TO_KEEP
 
+    replaced_count = 0
+    truncated_count = 0
+
     for turn_index, (assistant_idx, tool_indices) in enumerate(turn_boundaries):
         is_old_turn = turn_index < recent_cutoff
 
@@ -50,15 +55,24 @@ def mini_compact(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if is_old_turn:
                 # Replace old tool results with placeholder
                 msg["content"] = _TOOL_TRUNCATED_PLACEHOLDER
+                replaced_count += 1
             elif isinstance(content, str) and len(content) > LARGE_OUTPUT_THRESHOLD:
                 # Step 3: head+tail truncate large outputs in recent turns
                 msg["content"] = _truncate_head_tail(content)
+                truncated_count += 1
 
     # --- Step 2: replace image/document content blocks everywhere ---
     for msg in compacted:
         content = msg.get("content")
         if isinstance(content, list):
             msg["content"] = _compact_content_blocks(content)
+
+    if replaced_count or truncated_count:
+        logger.debug(
+            f"[mini_compact] {len(turn_boundaries)} tool turns found, "
+            f"{replaced_count} old results replaced, "
+            f"{truncated_count} large outputs truncated"
+        )
 
     return compacted
 

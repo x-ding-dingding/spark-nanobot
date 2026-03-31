@@ -280,10 +280,8 @@ class Compressor:
             if result.long_term_memories:
                 self._append_long_term_memories(result.long_term_memories)
 
-            # 6. Build new summary: previous + new QA pairs
-            if previous_summary and result.qa_pairs:
-                session.summary = previous_summary + "\n\n" + result.reconstructed_summary
-            elif result.qa_pairs:
+            # 6. Update summary: replace with new (old QA already in event memories)
+            if result.qa_pairs:
                 session.summary = result.reconstructed_summary
             # If no qa_pairs extracted, keep previous summary unchanged
 
