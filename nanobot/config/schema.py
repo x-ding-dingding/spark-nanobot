@@ -203,6 +203,16 @@ class GatewayConfig(BaseModel):
     port: int = 18790
 
 
+class DesktopPetConfig(BaseModel):
+    """Desktop pet event mirror configuration."""
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 18791
+    show_mode: str = "high_signal"  # high_signal | all | explicit | off
+    bubble_max_chars: int = 160
+    auto_launch: bool = False
+
+
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
     api_key: str = ""  # Brave Search API key
@@ -269,6 +279,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    desktop_pet: DesktopPetConfig = Field(default_factory=DesktopPetConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     
     @property

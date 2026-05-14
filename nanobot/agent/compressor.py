@@ -189,7 +189,6 @@ class Compressor:
         self.model = model
         self.workspace = workspace
         self._db_path = get_data_path() / "memory.db"
-        self._db_initialized = False
 
     # -- Public API (matches Summarizer interface) --------------------------
 
@@ -379,13 +378,10 @@ class Compressor:
     # -- SQLite storage -----------------------------------------------------
 
     async def _ensure_db(self) -> None:
-        """Create tables if they don't exist yet."""
-        if self._db_initialized:
-            return
+        """Create tables if they don't exist yet (idempotent, always safe to call)."""
         async with aiosqlite.connect(self._db_path) as db:
             await db.executescript(_SCHEMA_SQL)
             await db.commit()
-        self._db_initialized = True
 
     async def _save_event_memories(
         self, session_key: str, qa_pairs: list[EventMemoryItem]

@@ -262,17 +262,28 @@ class CronService:
         
         next_wake = self._get_next_wake_ms()
         if not next_wake or not self._running:
+            logger.debug("Cron: no next wake time, timer not armed")
             return
         
         delay_ms = max(0, next_wake - _now_ms())
         delay_s = delay_ms / 1000
         
         async def tick():
-            await asyncio.sleep(delay_s)
-            if self._running:
-                await self._on_timer()
+            try:
+                await asyncio.sleep(delay_s)
+                if self._running:
+                    await self._on_timer()
+            except asyncio.CancelledError:
+                pass  # Normal cancellation when re-arming
+            except Exception as exc:
+                logger.error(f"Cron: timer tick crashed: {exc}", exc_info=True)
+                # Always try to re-arm so the cron service never dies
+                if self._running:
+                    await asyncio.sleep(60)  # Back off 1 minute
+                    self._arm_timer()
         
         self._timer_task = asyncio.create_task(tick())
+        logger.debug(f"Cron: timer armed, next wake in {delay_s:.0f}s")
     
     async def _on_timer(self) -> None:
         """Handle timer tick - run due jobs."""
@@ -286,21 +297,30 @@ class CronService:
         ]
         
         for job in due_jobs:
-            if _is_within_active_window(job.schedule):
-                await self._execute_job(job)
-            else:
-                # Outside active window — skip execution but advance schedule
-                logger.info(f"Cron: skipping job '{job.name}' ({job.id}) — outside active hours/weekdays")
-                job.state.last_status = "skipped"
-                job.state.last_run_at_ms = _now_ms()
-                job.updated_at_ms = _now_ms()
-                if job.schedule.kind == "at":
-                    if job.delete_after_run:
-                        self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
-                    else:
-                        job.enabled = False
-                        job.state.next_run_at_ms = None
+            try:
+                if _is_within_active_window(job.schedule):
+                    await self._execute_job(job)
                 else:
+                    # Outside active window — skip execution but advance schedule
+                    logger.info(f"Cron: skipping job '{job.name}' ({job.id}) — outside active hours/weekdays")
+                    job.state.last_status = "skipped"
+                    job.state.last_run_at_ms = _now_ms()
+                    job.updated_at_ms = _now_ms()
+                    if job.schedule.kind == "at":
+                        if job.delete_after_run:
+                            self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                        else:
+                            job.enabled = False
+                            job.state.next_run_at_ms = None
+                    else:
+                        job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+            except Exception as exc:
+                logger.error(f"Cron: unhandled error processing job '{job.name}' ({job.id}): {exc}", exc_info=True)
+                # Advance schedule so the broken job doesn't block others
+                job.state.last_status = "error"
+                job.state.last_error = str(exc)
+                job.state.last_run_at_ms = _now_ms()
+                if job.schedule.kind != "at":
                     job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
         
         self._save_store()

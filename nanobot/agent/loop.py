@@ -10,6 +10,8 @@ from loguru import logger
 
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
+from nanobot.pet.events import PetEvent, PetStatus, bubble_text, should_show_bubble
+from nanobot.pet.hub import PetEventHub
 from nanobot.providers.base import LLMProvider
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.tools.registry import ToolRegistry
@@ -84,6 +86,9 @@ class AgentLoop:
         message_buffer_min: int = 10,
         summary_model: str | None = None,
         compress_model: str | None = None,
+        pet_hub: PetEventHub | None = None,
+        pet_show_mode: str = "high_signal",
+        pet_bubble_max_chars: int = 160,
     ):
         from nanobot.config.schema import ExecToolConfig
         from nanobot.cron.service import CronService
@@ -99,6 +104,9 @@ class AgentLoop:
         self.reasoning_effort = reasoning_effort
         self.allowed_paths = [Path(p).expanduser().resolve() for p in (allowed_paths or [])]
         self.protected_paths = [Path(p).resolve() for p in (protected_paths or [])]
+        self.pet_hub = pet_hub
+        self.pet_show_mode = pet_show_mode
+        self.pet_bubble_max_chars = pet_bubble_max_chars
         
         # Compression settings (compress_model > summary_model > main model)
         self.context_window = context_window
@@ -216,6 +224,62 @@ class AgentLoop:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
+
+    async def _publish_pet_status(
+        self,
+        msg: InboundMessage,
+        status: PetStatus,
+        *,
+        text: str | None = None,
+        direction: str = "system",
+    ) -> None:
+        """Publish a pet status event if the desktop pet is enabled."""
+        if not self.pet_hub or msg.channel == "system":
+            return
+        await self.pet_hub.publish(
+            PetEvent.status(
+                status=status,
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                direction=direction,
+                text=bubble_text(text, max_chars=self.pet_bubble_max_chars) if text else None,
+            )
+        )
+
+    async def _publish_pet_bubble(self, msg: InboundMessage, content: str) -> bool:
+        """Publish a pet bubble event when the response is high-signal."""
+        if not self.pet_hub or msg.channel == "system":
+            return False
+        if not should_show_bubble(
+            content,
+            show_mode=self.pet_show_mode,
+            max_chars=self.pet_bubble_max_chars,
+            metadata=msg.metadata,
+        ):
+            return False
+        await self.pet_hub.publish(
+            PetEvent.bubble(
+                status=PetStatus.IDLE,
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                direction="outbound",
+                text=bubble_text(content, max_chars=self.pet_bubble_max_chars),
+            )
+        )
+        return True
+
+    async def _publish_pet_error(self, msg: InboundMessage, error: Exception) -> None:
+        """Publish a pet error event if processing fails."""
+        if not self.pet_hub or msg.channel == "system":
+            return
+        await self.pet_hub.publish(
+            PetEvent.error(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                direction="system",
+                text=str(error),
+            )
+        )
     
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
@@ -232,7 +296,11 @@ class AgentLoop:
             The response message, or None if no response needed.
         """
         async with self._process_lock:
-            return await self._process_message_inner(msg)
+            try:
+                return await self._process_message_inner(msg)
+            except Exception as error:
+                await self._publish_pet_error(msg, error)
+                raise
 
     async def _process_message_inner(self, msg: InboundMessage) -> OutboundMessage | None:
         """Actual message processing logic (called under _process_lock)."""
@@ -248,6 +316,13 @@ class AgentLoop:
         stripped_content = msg.content.strip().lower()
         if stripped_content in {"/reset", "/clear", "/new"}:
             return await self._handle_reset_command(msg)
+
+        await self._publish_pet_status(
+            msg,
+            PetStatus.WORKING,
+            text=msg.content,
+            direction="inbound",
+        )
         
         # Get or create session
         session = self.sessions.get_or_create(msg.session_key)
@@ -366,12 +441,19 @@ class AgentLoop:
         
         # Check if summarization should be triggered based on token usage
         self._maybe_trigger_summarization(session, last_response)
+
+        pet_bubble_emitted = await self._publish_pet_bubble(msg, final_content)
+        await self._publish_pet_status(msg, PetStatus.IDLE, direction="outbound")
+
+        response_metadata = dict(msg.metadata or {})
+        if pet_bubble_emitted:
+            response_metadata["_pet_bubble_emitted"] = True
         
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+            metadata=response_metadata,  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
     
     async def _handle_reset_command(self, msg: InboundMessage) -> OutboundMessage:

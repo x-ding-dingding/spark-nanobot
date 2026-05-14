@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nanobot pet</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="pet-shell" data-status="idle">
+      <section class="bubble" id="bubble" hidden>
+        <p id="bubble-text"></p>
+      </section>
+      <section class="pet-stage" aria-live="polite" aria-label="nanobot pet">
+        <div class="pet-card" id="pet">
+          <img
+            class="pet-avatar"
+            src="./assets/spark-idle.png?v=20260514-state-v1"
+            alt="spark"
+            draggable="false"
+          />
+          <div class="pet-name">spark</div>
+        </div>
+      </section>
+      <span class="connection-dot" id="dot" aria-hidden="true"></span>
+    </main>
+    <script src="./pet.js"></script>
+  </body>
+</html>

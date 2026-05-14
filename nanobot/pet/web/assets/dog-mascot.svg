@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="spark">
+  <defs>
+    <radialGradient id="paper" cx="44%" cy="34%" r="70%">
+      <stop offset="0%" stop-color="#fffef7"/>
+      <stop offset="64%" stop-color="#f4efe2"/>
+      <stop offset="100%" stop-color="#e7dec9"/>
+    </radialGradient>
+    <linearGradient id="fur" x1="44" y1="42" x2="190" y2="204" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fffaf0"/>
+      <stop offset="58%" stop-color="#f0e7d6"/>
+      <stop offset="100%" stop-color="#d9ccb4"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="5" flood-color="#3b3022" flood-opacity=".18"/>
+    </filter>
+    <style>
+      .ink {
+        fill: none;
+        stroke: #282522;
+        stroke-width: 7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .ink-mid {
+        fill: none;
+        stroke: #282522;
+        stroke-width: 4.4;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .sketch {
+        fill: none;
+        stroke: #282522;
+        stroke-width: 2.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        opacity: .42;
+      }
+    </style>
+  </defs>
+
+  <circle class="outer-ring" cx="128" cy="128" r="111" fill="url(#paper)" stroke="#282522" stroke-width="7"/>
+
+  <g filter="url(#softShadow)">
+    <path class="antenna-stem ink-mid" d="M128 39 C128 28 129 22 130 17"/>
+    <circle class="antenna-light" cx="130" cy="18" r="10" fill="#bff7ff" stroke="#168fb7" stroke-width="4"/>
+    <path class="sketch" stroke="#168fb7" d="M130 2 L130 8 M130 28 L130 35 M114 18 L120 18 M140 18 L148 18 M119 7 L123 11 M139 7 L136 12 M119 29 L123 24 M141 29 L137 24"/>
+
+    <path class="body" d="M86 196 C91 172 106 158 128 158 C150 158 165 172 170 196 C154 208 103 209 86 196Z" fill="url(#fur)" stroke="#282522" stroke-width="7" stroke-linejoin="round"/>
+
+    <path class="ear-left" d="M73 93 C50 82 34 98 37 126 C40 156 56 181 76 176 C97 171 98 117 73 93Z" fill="#efe5d3" stroke="#282522" stroke-width="7" stroke-linejoin="round"/>
+    <path class="ear-right" d="M183 93 C206 82 222 98 219 126 C216 156 200 181 180 176 C159 171 158 117 183 93Z" fill="#efe5d3" stroke="#282522" stroke-width="7" stroke-linejoin="round"/>
+
+    <path class="dog-head" d="M74 103 C79 67 102 49 128 49 C154 49 177 67 182 103 C190 156 164 184 128 184 C92 184 66 156 74 103Z" fill="url(#fur)" stroke="#282522" stroke-width="7" stroke-linejoin="round"/>
+
+    <path class="sketch" d="M105 55 C112 48 119 47 126 50 M134 49 C145 47 155 51 163 59 M93 92 C87 105 86 119 88 133 M165 88 C174 103 176 121 172 138"/>
+    <path class="sketch" d="M58 113 C50 130 53 150 64 164 M198 113 C206 130 203 150 192 164"/>
+
+    <path class="brow-left ink-mid" d="M97 101 C104 96 112 96 119 100"/>
+    <path class="brow-right ink-mid" d="M137 100 C144 96 153 96 160 101"/>
+    <ellipse class="eye-left" cx="105" cy="119" rx="7.5" ry="11" fill="#1d1b19"/>
+    <ellipse class="eye-right" cx="151" cy="119" rx="7.5" ry="11" fill="#1d1b19"/>
+    <circle cx="102" cy="115" r="2.2" fill="#ffffff" opacity=".78"/>
+    <circle cx="148" cy="115" r="2.2" fill="#ffffff" opacity=".78"/>
+
+    <path class="snout" d="M101 140 C108 130 119 126 128 127 C137 126 148 130 155 140 C152 161 139 171 128 171 C117 171 104 161 101 140Z" fill="#fff5e5" stroke="#282522" stroke-width="4.4" stroke-linejoin="round"/>
+    <path class="nose" d="M115 134 C119 128 137 128 141 134 C144 141 138 149 128 149 C118 149 112 141 115 134Z" fill="#151412"/>
+    <path class="ink-mid" d="M128 148 C128 155 128 158 128 160"/>
+    <path class="ink-mid" d="M128 160 C122 169 113 166 109 160"/>
+    <path class="ink-mid" d="M128 160 C134 169 143 166 147 160"/>
+
+    <path class="sketch" d="M77 142 C86 138 94 136 101 136 M77 156 C88 151 97 150 105 150 M179 142 C170 138 162 136 155 136 M179 156 C168 151 159 150 151 150"/>
+    <path class="sketch" d="M111 80 C116 74 123 72 130 74 M86 176 C91 184 98 189 107 192 M170 176 C165 184 158 189 149 192"/>
+  </g>
+</svg>

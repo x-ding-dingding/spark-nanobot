@@ -6,6 +6,8 @@ from typing import Callable, Awaitable
 from loguru import logger
 
 from nanobot.bus.events import InboundMessage, OutboundMessage
+from nanobot.pet.events import PetEvent, PetStatus, bubble_text, should_show_bubble
+from nanobot.pet.hub import PetEventHub
 
 
 class MessageBus:
@@ -16,15 +18,33 @@ class MessageBus:
     them and pushes responses to the outbound queue.
     """
     
-    def __init__(self):
+    def __init__(
+        self,
+        pet_hub: PetEventHub | None = None,
+        pet_show_mode: str = "high_signal",
+        pet_bubble_max_chars: int = 160,
+    ):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue()
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
         self._outbound_subscribers: dict[str, list[Callable[[OutboundMessage], Awaitable[None]]]] = {}
+        self.pet_hub = pet_hub
+        self.pet_show_mode = pet_show_mode
+        self.pet_bubble_max_chars = pet_bubble_max_chars
         self._running = False
     
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
         await self.inbound.put(msg)
+        if self.pet_hub:
+            await self.pet_hub.publish(
+                PetEvent.status(
+                    status=PetStatus.WORKING,
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    direction="inbound",
+                    text=bubble_text(msg.content, max_chars=self.pet_bubble_max_chars),
+                )
+            )
     
     async def consume_inbound(self) -> InboundMessage:
         """Consume the next inbound message (blocks until available)."""
@@ -33,6 +53,25 @@ class MessageBus:
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """Publish a response from the agent to channels."""
         await self.outbound.put(msg)
+        if (
+            self.pet_hub
+            and not (msg.metadata or {}).get("_pet_bubble_emitted")
+            and should_show_bubble(
+                msg.content,
+                show_mode=self.pet_show_mode,
+                max_chars=self.pet_bubble_max_chars,
+                metadata=msg.metadata,
+            )
+        ):
+            await self.pet_hub.publish(
+                PetEvent.bubble(
+                    status=PetStatus.IDLE,
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    direction="outbound",
+                    text=bubble_text(msg.content, max_chars=self.pet_bubble_max_chars),
+                )
+            )
     
     async def consume_outbound(self) -> OutboundMessage:
         """Consume the next outbound message (blocks until available)."""

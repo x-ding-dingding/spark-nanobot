@@ -142,5 +142,13 @@
   "gateway": {
     "host": "0.0.0.0",
     "port": 18790
+  },
+  "desktopPet": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 18791,
+    "showMode": "high_signal",
+    "bubbleMaxChars": 160,
+    "autoLaunch": false
   }
 }

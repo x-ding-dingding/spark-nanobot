@@ -317,6 +317,38 @@ def _make_provider(config):
     )
 
 
+def _pet_web_url(host: str = "127.0.0.1", port: int = 18791) -> str:
+    """Return the local desktop pet HTML URL for a gateway WebSocket."""
+    from urllib.parse import quote
+
+    index_path = Path(__file__).parent.parent / "pet" / "web" / "index.html"
+    ws_url = f"ws://{host}:{port}"
+    return f"{index_path.resolve().as_uri()}?ws={quote(ws_url, safe='')}"
+
+
+def _spawn_pet_window(host: str, port: int) -> None:
+    """Best-effort launch of the pet window as a detached process."""
+    import subprocess
+
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "nanobot",
+                "pet",
+                "--host",
+                host,
+                "--port",
+                str(port),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        console.print(f"[yellow]Desktop pet auto-launch failed: {exc}[/yellow]")
+
+
 # ============================================================================
 # Gateway / Server
 # ============================================================================
@@ -344,7 +376,24 @@ def gateway(
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
-    bus = MessageBus()
+    pet_hub = None
+    pet_server = None
+    if config.desktop_pet.enabled:
+        from nanobot.pet.hub import PetEventHub
+        from nanobot.pet.server import PetWebSocketServer
+
+        pet_hub = PetEventHub()
+        pet_server = PetWebSocketServer(
+            hub=pet_hub,
+            host=config.desktop_pet.host,
+            port=config.desktop_pet.port,
+        )
+
+    bus = MessageBus(
+        pet_hub=pet_hub,
+        pet_show_mode=config.desktop_pet.show_mode,
+        pet_bubble_max_chars=config.desktop_pet.bubble_max_chars,
+    )
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
     
@@ -372,6 +421,9 @@ def gateway(
         message_buffer_min=config.agents.defaults.message_buffer_min,
         summary_model=config.agents.defaults.summary_model,
         compress_model=config.agents.defaults.compress_model,
+        pet_hub=pet_hub,
+        pet_show_mode=config.desktop_pet.show_mode,
+        pet_bubble_max_chars=config.desktop_pet.bubble_max_chars,
     )
     
     # Set cron callback (needs agent)
@@ -382,10 +434,9 @@ def gateway(
         that any ``message()`` calls inside the agent loop are routed to the
         correct channel (e.g. dingtalk instead of cli).
 
-        The agent is expected to use the ``message`` tool to deliver messages
-        to the user. We do NOT additionally publish the agent's final text
-        response as an outbound message, because that would cause duplicate
-        messages when the agent already called ``message()`` during processing.
+        When ``deliver`` is True and the agent returns a non-empty response,
+        we publish it as an outbound message so the user always receives it
+        even if the agent didn't call the ``message`` tool explicitly.
         """
         target_channel = job.payload.channel or "cli"
         target_chat_id = job.payload.to or "direct"
@@ -396,6 +447,16 @@ def gateway(
             channel=target_channel,
             chat_id=target_chat_id,
         )
+
+        # Deliver the agent's final response to the target channel
+        if job.payload.deliver and response and response.strip():
+            from nanobot.bus.events import OutboundMessage
+            await bus.publish_outbound(OutboundMessage(
+                channel=target_channel,
+                chat_id=target_chat_id,
+                content=response,
+            ))
+
         return response
     cron.on_job = on_cron_job
     
@@ -424,9 +485,19 @@ def gateway(
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
     
     console.print(f"[green]✓[/green] Heartbeat: every 30m")
+    if config.desktop_pet.enabled:
+        pet_url = _pet_web_url(config.desktop_pet.host, config.desktop_pet.port)
+        console.print(
+            f"[green]✓[/green] Desktop pet: ws://{config.desktop_pet.host}:{config.desktop_pet.port}"
+        )
+        console.print(f"[dim]Open pet UI: {pet_url}[/dim]")
     
     async def run():
         try:
+            if pet_server:
+                await pet_server.start()
+                if config.desktop_pet.auto_launch:
+                    _spawn_pet_window(config.desktop_pet.host, pet_server.bound_port)
             await cron.start()
             await heartbeat.start()
             await asyncio.gather(
@@ -435,9 +506,12 @@ def gateway(
             )
         except KeyboardInterrupt:
             console.print("\nShutting down...")
+        finally:
             heartbeat.stop()
             cron.stop()
             agent.stop()
+            if pet_server:
+                await pet_server.stop()
             await channels.stop_all()
     
     asyncio.run(run())
@@ -448,6 +522,49 @@ def gateway(
 # ============================================================================
 # Agent Commands
 # ============================================================================
+
+
+@app.command()
+def pet(
+    host: str = typer.Option("127.0.0.1", "--host", help="Desktop pet WebSocket host"),
+    port: int = typer.Option(18791, "--port", help="Desktop pet WebSocket port"),
+    no_webview: bool = typer.Option(False, "--no-webview", help="Print the local HTML URL instead of opening WebView"),
+):
+    """Open the local desktop pet UI."""
+    url = _pet_web_url(host, port)
+    if no_webview:
+        console.print(f"Open desktop pet UI: [cyan]{url}[/cyan]")
+        return
+
+    try:
+        import webview  # type: ignore[import-not-found]
+    except ImportError:
+        console.print("[yellow]pywebview is not installed, so I can't open a native pet window.[/yellow]")
+        console.print(f"Open desktop pet UI in a browser instead: [cyan]{url}[/cyan]")
+        return
+
+    from nanobot.pet.window import PetWindowApi, keep_window_visible_on_all_spaces
+
+    window_api = PetWindowApi()
+    window = webview.create_window(
+        "nanobot pet",
+        url,
+        js_api=window_api,
+        width=240,
+        height=260,
+        frameless=True,
+        easy_drag=False,
+        resizable=False,
+        on_top=True,
+        transparent=True,
+        text_select=False,
+    )
+    if window is None:
+        console.print("[red]Failed to create desktop pet window.[/red]")
+        return
+
+    window_api.attach(window)
+    webview.start(lambda: keep_window_visible_on_all_spaces(window))
 
 
 @app.command()
